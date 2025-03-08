@@ -1,4 +1,3 @@
-__version__ = "1.1.0"  # Added feature scaling control
 """
 Main execution script for model training
 """
@@ -11,6 +10,7 @@ import argparse
 
 from data_loader import load_data, create_output_directories, get_target_lists
 from model_training import process_target
+from version import __version__
 
 def main():
     # Parse command-line arguments

@@ -13,7 +13,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.model_selection import GroupShuffleSplit
 from tabpfn import TabPFNRegressor, TabPFNClassifier
-from main import __version__
+from version import __version__
 
 from feature_selection import create_feature_selection_pipeline
 from data_loader import check_existing_results, load_existing_result
