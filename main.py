@@ -1,3 +1,4 @@
+__version__ = "1.1.0"  # Added feature scaling control
 """
 Main execution script for model training
 """
@@ -23,6 +24,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='.', help='Directory for output files')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level')
     parser.add_argument('--scale_features', action='store_true', help='Apply StandardScaler to input features')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args()
     
     # Print configuration
