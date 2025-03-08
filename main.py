@@ -146,13 +146,15 @@ def main():
                 "Target": r["Target"],
                 "Target ID": r["Target ID"],
                 "Type": "Regression",
-                "Framework_Version": __version__,  # Add version here
+                "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["R2"],  # R2 as primary metric for regression
                 "Time (s)": r["Time (s)"],
-                "Model file": r["Model file"]
+                "Model file": r["Model file"],
+                "Feature importance file": r.get("Feature importance file", ""),
+                "Predictions file": r.get("Predictions file", "")
             }
             all_results.append(summ)
 
@@ -162,13 +164,15 @@ def main():
                 "Target": r["Target"],
                 "Target ID": r["Target ID"],
                 "Type": "Classification",
-                "Framework_Version": __version__,  # Add version here
+                "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["Accuracy"],  # Accuracy as primary metric for classification
                 "Time (s)": r["Time (s)"],
-                "Model file": r["Model file"]
+                "Model file": r["Model file"],
+                "Feature importance file": r.get("Feature importance file", ""),
+                "Predictions file": r.get("Predictions file", "")
             }
             all_results.append(summ)
 

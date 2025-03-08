@@ -24,8 +24,12 @@ This framework provides a comprehensive pipeline for training machine learning m
 - **TabPFN Models**: Utilizes Transformer-based TabPFN models for accurate tabular data prediction
 - **Target Grouping**: Organizes targets into biological categories (longitudinal, pathology, omics, etc.)
 - **Prediction Module**: Dedicated module for making predictions with trained models
-- **Feature Scaling Control**: Option to enable or disable StandardScaler on input features
+- **Comprehensive Importance Scores**: Saves importance scores for all proteins/predictors, not just selected ones
+- **Selection Status**: Tracks which features were selected for the final model
+- **Multiple Methods**: Aggregates importance scores from various feature selection algorithms
+- **CSV Export**: Stores feature importance data in easy-to-analyze CSV files
 
+ 
 ## Installation
 
 1. Create a virtual environment (recommended):
@@ -82,11 +86,6 @@ With covariates:
 python main.py --include_covariates --method CatBoost
 ```
 
-With feature scaling (applies StandardScaler to input features):
-```bash
-python main.py --scale_features --method CatBoost
-```
-
 Specify targets:
 ```bash
 python main.py --targets cts_mmse30 msex age_at_visit
@@ -119,16 +118,6 @@ Force using covariates for all models:
 python prediction.py --force_covariates
 ```
 
-Force feature scaling for all models:
-```bash
-python prediction.py --force_scaling
-```
-
-Force skipping feature scaling for all models:
-```bash
-python prediction.py --force_no_scaling
-```
-
 Predict only specific targets:
 ```bash
 python prediction.py --target_ids target1_id target2_id
@@ -138,7 +127,6 @@ python prediction.py --target_ids target1_id target2_id
 
 #### Training (main.py)
 - `--include_covariates`: Include covariates in models
-- `--scale_features`: Apply StandardScaler to input features
 - `--method`: Feature selection method (default: 'CatBoost', options: 'MI', 'XGB', 'CatBoost', 'RF')
 - `--targets`: Specific targets to process
 - `--target_group`: Target group to process (choices: 'longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope', 'all')
@@ -152,8 +140,6 @@ python prediction.py --target_ids target1_id target2_id
 - `--output_dir`: Directory to save predictions (default: './predictions')
 - `--force_covariates`: Force using covariates for all models
 - `--force_no_covariates`: Force excluding covariates for all models
-- `--force_scaling`: Force using feature scaling for all models
-- `--force_no_scaling`: Force skipping feature scaling for all models
 - `--no_skip_existing`: Do not skip targets with existing predictions
 - `--target_ids`: Specific target IDs to process
 
@@ -163,10 +149,39 @@ The framework generates the following outputs:
 
 - `models/`: Directory containing trained models (pickle files)
 - `results/`: Directory containing individual target results (JSON)
+- `features/`: Directory containing feature importance information (CSV)
+- `predictions/`: Directory containing prediction outputs (CSV)
 - `regression_results.csv`: Summary of regression model performances
 - `classification_results.csv`: Summary of classification model performances
 - `all_results_summary.csv`: Combined summary of all results
-- `predictions/`: Directory containing predictions (when using prediction.py)
+
+## Prediction Outputs
+
+The framework now automatically saves predictions during model training:
+
+- **Training and Test Sets**: Saves predictions for both training and test sets with true values for comparison
+- **Full Dataset Models**: Tracks predictions from models trained on the complete dataset
+- **Classification Probabilities**: For classification tasks, stores class probabilities
+- **Integrated with Model Metadata**: Links prediction files with model metadata
+
+### Accessing Predictions
+
+Prediction outputs are stored in the `predictions` directory:
+
+```
+predictions/
+  ├── target1_id_training_predictions.csv.gz    # Training and test set predictions
+  ├── target1_id_full_predictions.csv.gz       # Full dataset predictions
+  ├── target2_id_training_predictions.csv.gz
+  └── ...
+```
+
+Each predictions file contains:
+- `set`: Indicates if the prediction is for 'train', 'test', or 'all' data
+- `true_value`: The actual target value
+- `prediction`: The model's prediction
+- For classification: additional `prob_class_X` columns with class probabilities
+
 
 ## Feature Selection Details
 
@@ -179,16 +194,22 @@ The feature selection module implements an ensemble approach that combines multi
 
 Features are ranked based on their aggregate importance across all selected methods, and the top k features are selected.
 
-## Feature Scaling
+### Accessing Feature Importance
 
-The framework provides flexible control over feature scaling:
+Feature importance information is stored in the `features` directory:
 
-- During training, use `--scale_features` to apply StandardScaler to input features
-- Models save their scaling preference in the model file
-- During prediction, the system automatically applies scaling based on model requirements
-- You can override scaling behavior with `--force_scaling` or `--force_no_scaling`
+```
+features/
+  ├── target1_id_feature_importance.csv.gz    # Feature importance for initial model
+  ├── target1_id_full_feature_importance.csv.gz  # Feature importance for full-data model
+  ├── target2_id_feature_importance.csv.gz
+  └── ...
+```
 
-This allows you to experiment with different scaling approaches and optimize model performance.
+Each feature importance file contains:
+- `feature_name`: Name of the predictor/protein
+- `importance_score`: Relative importance score
+- `selected`: Boolean indicating if the feature was selected for the final model
 
 ## Model Training Details
 

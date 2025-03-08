@@ -196,8 +196,8 @@ def check_prediction_exists(target_id, output_dir):
     
     if exists:
         try:
-            # Try to read the file to ensure it's valid
-            df = pd.read_csv(prediction_file)
+            # Try to read the gzipped file to ensure it's valid
+            df = pd.read_csv(prediction_file, compression='gzip')
             
             # Check if the file has the expected structure
             if 'sample_id' in df.columns and 'prediction' in df.columns and len(df) > 0:

@@ -156,8 +156,15 @@ def create_output_directories(output_dir='.'):
     output_dir : str, default='.'
         Base output directory
     """
+    # Original directories
     os.makedirs(os.path.join(output_dir, 'models'), exist_ok=True)
     os.makedirs(os.path.join(output_dir, 'results'), exist_ok=True)
+    
+    # New directories for feature importance and predictions
+    os.makedirs(os.path.join(output_dir, 'features'), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'predictions'), exist_ok=True)
+    
+    print(f"Created output directories in {output_dir}")
 
 def load_existing_result(target_id, output_dir='.'):
     """

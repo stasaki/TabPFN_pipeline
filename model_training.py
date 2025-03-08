@@ -167,249 +167,6 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         
 # Add functions to train classification and regression models
 
-def train_classification_model(X_train, X_test, y_train, y_test, 
-                              covs_train, covs_test,
-                              selected_k, predictor_names, covariate_names,
-                              cov_categorical_indices, categorical_indices,
-                              target_name, target_id, target_nlevels, include_covariates,
-                              method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False):
-    """
-    Train a classification model
-    
-    Parameters:
-    -----------
-    X_train, X_test : numpy.ndarray
-        Training and test features
-    y_train, y_test : numpy.ndarray
-        Training and test targets
-    covs_train, covs_test : numpy.ndarray
-        Training and test covariates
-    selected_k : int
-        Number of features to select
-    predictor_names : numpy.ndarray
-        Names of predictor features
-    covariate_names : numpy.ndarray
-        Names of covariates
-    cov_categorical_indices : list
-        Indices of categorical covariates
-    categorical_indices : list
-        Indices of categorical features
-    target_name : str
-        Name of the target
-    target_id : str
-        ID of the target
-    target_nlevels : int
-        Number of levels in the target
-    include_covariates : bool
-        Whether to include covariates
-    method : str, default="CatBoost"
-        Feature selection method
-    verbose : int, default=1
-        Verbosity level
-    gpu : bool, default=True
-        Whether to use GPU
-    output_dir : str, default='.'
-        Output directory
-    skip_scaling : bool, default=False
-        If True, skips the StandardScaler step for input features
-    
-    Returns:
-    --------
-    dict
-        Result dictionary
-    """
-    target_start = time.time()
-    model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
-    result_filename = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
-    
-    # For classification, we might need to convert y to integer labels
-    if not np.issubdtype(y_train.dtype, np.integer):
-        # Get unique classes and map them to integers
-        classes = np.unique(np.concatenate([y_train, y_test]))
-        class_map = {val: idx for idx, val in enumerate(classes)}
-        y_train_mapped = np.array([class_map[val] for val in y_train])
-        y_test_mapped = np.array([class_map[val] for val in y_test])
-        print(f"Mapped classes: {class_map}")
-    else:
-        class_map = None
-        y_train_mapped = y_train
-        y_test_mapped = y_test
-    
-    # Create a pipeline for X that scales and selects features
-    pipeline_fs = create_feature_selection_pipeline(
-        selected_k=selected_k, 
-        methods=[method],
-        verbose=verbose,
-        gpu=gpu,
-        task='classification',
-        skip_scaling=skip_scaling  # Pass the skip_scaling parameter to pipeline creation
-    )
-    
-    # Fit the pipeline on X_train and transform both training and test sets
-    X_train_selected = pipeline_fs.fit_transform(X_train, y_train_mapped)
-    X_test_selected = pipeline_fs.transform(X_test)
-    
-    # Get the indices of selected features
-    selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
-    
-    # Get the names of selected features
-    selected_feature_names = predictor_names[selected_feature_indices]
-    
-    # Concatenate the selected features from X with the covariates
-    X_train_final = np.hstack([X_train_selected, covs_train]) if include_covariates else X_train_selected
-    X_test_final = np.hstack([X_test_selected, covs_test]) if include_covariates else X_test_selected
-    
-    # Update categorical indices for the final feature matrix
-    final_categorical_indices = categorical_indices.copy()
-    if include_covariates:
-        for cov_idx in cov_categorical_indices:
-            final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
-            
-    # Initialize and train the classifier on the final training features
-    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
-    classifier = TabPFNClassifier(
-        device=device,
-        categorical_features_indices=final_categorical_indices,
-        n_estimators=8  # You can adjust this parameter as needed
-    )
-    classifier.fit(X_train_final, y_train_mapped)
-    
-    # Feature types list depends on whether covariates are included
-    feature_types = ['predictor'] * len(selected_feature_names)
-    feature_names = selected_feature_names
-    
-    if include_covariates:
-        feature_types.extend(['covariate'] * len(covariate_names))
-        feature_names = np.concatenate([selected_feature_names, covariate_names])
-    
-    # Predict on the test set
-    predictions = classifier.predict(X_test_final)
-    
-    # For probability outputs (optional)
-    try:
-        pred_proba = classifier.predict_proba(X_test_final)
-        print(f"Prediction probabilities shape: {pred_proba.shape}")
-    except:
-        print("Warning: predict_proba not available or failed")
-        pred_proba = None
-    
-    # Calculate classification metrics
-    accuracy = accuracy_score(y_test_mapped, predictions)
-    
-    # For multi-class, use 'weighted' average
-    average_method = 'binary' if target_nlevels == 2 else 'weighted'
-    
-    try:
-        precision = precision_score(y_test_mapped, predictions, average=average_method)
-        recall = recall_score(y_test_mapped, predictions, average=average_method)
-        f1 = f1_score(y_test_mapped, predictions, average=average_method)
-    except Exception as e:
-        print(f"Warning: Could not calculate some metrics: {e}")
-        precision = recall = f1 = np.nan
-    
-    # Create a confusion matrix
-    cm = confusion_matrix(y_test_mapped, predictions)
-    print(f"Confusion matrix:\n{cm}")
-    
-    # Create a dictionary for this target's results
-    result_dict = {
-        "Target": target_name,
-        "Target ID": target_id,
-        "Type": "Classification",
-        "Framework_Version": __version__,  # Add version to results
-        "Number of samples": len(y_train) + len(y_test),
-        "Include Covariates": include_covariates,
-        "Scale Features": not skip_scaling,
-        "Classes": target_nlevels,
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall": recall,
-        "F1": f1,
-        "Time (s)": time.time() - target_start,
-        "Model file": model_filename
-    }
-    
-    # Now retrain the model using ALL data after evaluation
-    print("Retraining the model using all available data...")
-    
-    # Combine train and test data
-    X_all = np.vstack([X_train, X_test])
-    y_all = np.concatenate([y_train, y_test])
-    covs_all = np.vstack([covs_train, covs_test]) if include_covariates else np.zeros((len(y_all), 0))
-    
-    # Map all labels if needed
-    if class_map is not None:
-        y_all_mapped = np.array([class_map[val] for val in y_all])
-    else:
-        y_all_mapped = y_all
-    
-    # Refit the feature selection pipeline on all data
-    X_all_selected = pipeline_fs.fit_transform(X_all, y_all_mapped)
-    
-    # Verify that the same features are selected (they may be different when using all data)
-    all_selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
-    all_selected_feature_names = predictor_names[all_selected_feature_indices]
-    
-    print(f"Selected features using all data: {all_selected_feature_names}")
-    
-    # Prepare final feature matrix
-    X_all_final = np.hstack([X_all_selected, covs_all]) if include_covariates else X_all_selected
-    
-    # Update categorical indices for the all-data feature matrix
-    all_final_categorical_indices = categorical_indices.copy()
-    if include_covariates:
-        for cov_idx in cov_categorical_indices:
-            all_final_categorical_indices.append(X_all_selected.shape[1] + cov_idx)
-    
-    # Initialize and train the final classifier on all data
-    final_classifier = TabPFNClassifier(
-        device=device,
-        categorical_features_indices=all_final_categorical_indices,
-        n_estimators=8
-    )
-    final_classifier.fit(X_all_final, y_all_mapped)
-    
-    # Update feature information
-    all_feature_types = ['predictor'] * len(all_selected_feature_names)
-    all_feature_names = all_selected_feature_names
-    
-    if include_covariates:
-        all_feature_types.extend(['covariate'] * len(covariate_names))
-        all_feature_names = np.concatenate([all_selected_feature_names, covariate_names])
-    
-    # Save the ALL-DATA trained model
-    with open(model_filename, 'wb') as f:
-        pickle.dump({
-            'model': final_classifier, 
-            'class_map': class_map,
-            'target_id': target_id,
-            'target_type': 'discrete',
-            'include_covariates': include_covariates,
-            'scale_features': not skip_scaling,  # Store the scale_features flag in the model
-            'framework_version': __version__,  # Save framework version
-            'feature_info': {
-                'feature_name': all_feature_names,
-                'feature_type': all_feature_types,
-                'categorical_indices': all_final_categorical_indices},
-            'performance': {
-                'accuracy': accuracy,
-                'precision': precision,
-                'recall': recall,
-                'f1': f1,
-                'confusion_matrix': cm.tolist()
-            },
-            'is_full_data_model': True  # Indicate this model was trained on all data
-        }, f)
-    print(f"Saved classification model (trained on ALL data) to {model_filename}")
-    
-    
-    # Save the result_dict to an individual text file
-    with open(result_filename, 'w') as f:
-        # Format the output as pretty JSON
-        json.dump(result_dict, f, indent=4)
-    print(f"Saved individual result to {result_filename}")
-    
-    return result_dict
 
 def train_regression_model(X_train, X_test, y_train, y_test, 
                            covs_train, covs_test,
@@ -420,40 +177,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     """
     Train a regression model
     
-    Parameters:
-    -----------
-    X_train, X_test : numpy.ndarray
-        Training and test features
-    y_train, y_test : numpy.ndarray
-        Training and test targets
-    covs_train, covs_test : numpy.ndarray
-        Training and test covariates
-    selected_k : int
-        Number of features to select
-    predictor_names : numpy.ndarray
-        Names of predictor features
-    covariate_names : numpy.ndarray
-        Names of covariates
-    cov_categorical_indices : list
-        Indices of categorical covariates
-    categorical_indices : list
-        Indices of categorical features
-    target_name : str
-        Name of the target
-    target_id : str
-        ID of the target
-    include_covariates : bool
-        Whether to include covariates
-    method : str, default="CatBoost"
-        Feature selection method
-    verbose : int, default=1
-        Verbosity level
-    gpu : bool, default=True
-        Whether to use GPU
-    output_dir : str, default='.'
-        Output directory
-    skip_scaling : bool, default=False
-        If True, skips the StandardScaler step for input features
+    Parameters remain unchanged
     
     Returns:
     --------
@@ -463,6 +187,10 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     target_start = time.time()
     model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
     result_filename = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
+    
+    # Create directory for predictions
+    predictions_dir = os.path.join(output_dir, 'predictions')
+    os.makedirs(predictions_dir, exist_ok=True)
     
     # Scale y: create a separate scaler for the target variable
     y_scaler = StandardScaler()
@@ -475,12 +203,18 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         verbose=verbose,
         gpu=gpu,
         task='regression',
-        skip_scaling=skip_scaling  # Pass the skip_scaling parameter to pipeline creation
+        skip_scaling=skip_scaling
     )
     
-    # Fit the pipeline on X_train and transform both training and test sets
-    X_train_selected = pipeline_fs.fit_transform(X_train, y_train_scaled)
+    # Fit the pipeline on X_train
+    pipeline_fs.fit(X_train, y_train_scaled, feature_selection__feature_names=predictor_names)
+    
+    # Transform both training and test sets
+    X_train_selected = pipeline_fs.transform(X_train)
     X_test_selected = pipeline_fs.transform(X_test)
+    
+    # Save feature importance after fitting
+    feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, target_id)
     
     # Get the indices of selected features
     selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
@@ -515,26 +249,52 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         feature_types.extend(['covariate'] * len(covariate_names))
         feature_names = np.concatenate([selected_feature_names, covariate_names])
     
-    # Predict on the test set (predictions are in scaled space)
-    predictions_scaled = regressor.predict(X_test_final)
+    # Predict on both training and test sets (predictions are in scaled space)
+    train_predictions_scaled = regressor.predict(X_train_final)
+    test_predictions_scaled = regressor.predict(X_test_final)
     
     # Inverse-transform predictions back to the original y scale
-    predictions = y_scaler.inverse_transform(predictions_scaled.reshape(-1, 1)).ravel()
+    train_predictions = y_scaler.inverse_transform(train_predictions_scaled.reshape(-1, 1)).ravel()
+    test_predictions = y_scaler.inverse_transform(test_predictions_scaled.reshape(-1, 1)).ravel()
     
-    # Calculate performance metrics on the original y scale
-    mse = mean_squared_error(y_test, predictions)
-    mae = mean_absolute_error(y_test, predictions)
-    r2 = r2_score(y_test, predictions)
+    # Save training and test set predictions
+    train_ids = np.arange(len(train_predictions))  # Using indices as placeholders
+    test_ids = np.arange(len(test_predictions))    # Replace with actual IDs if available
+    
+    train_pred_df = pd.DataFrame({
+        'set': ['train'] * len(train_predictions),
+        'true_value': y_train,
+        'prediction': train_predictions
+    })
+    
+    test_pred_df = pd.DataFrame({
+        'set': ['test'] * len(test_predictions),
+        'true_value': y_test,
+        'prediction': test_predictions
+    })
+    
+    # Combine the dataframes
+    all_pred_df = pd.concat([train_pred_df, test_pred_df], ignore_index=True)
+    
+    # Save predictions to file
+    predictions_file = os.path.join(predictions_dir, f"{target_id}_training_predictions.csv.gz")
+    all_pred_df.to_csv(predictions_file, index=False, compression='gzip')
+    print(f"Saved training and test predictions to {predictions_file} (gzip compressed)")
+    
+    # Calculate performance metrics on the original y scale using test set
+    mse = mean_squared_error(y_test, test_predictions)
+    mae = mean_absolute_error(y_test, test_predictions)
+    r2 = r2_score(y_test, test_predictions)
     
     # Calculate Pearson's correlation coefficient
-    pearson_r = np.corrcoef(y_test, predictions)[0, 1]
+    pearson_r = np.corrcoef(y_test, test_predictions)[0, 1]
     
     # Create a dictionary for this target's results
     result_dict = {
         "Target": target_name,
         "Target ID": target_id,
         "Type": "Regression",
-        "Framework_Version": __version__,  # Add version to results
+        "Framework_Version": __version__,
         "Number of samples": len(y_train) + len(y_test),
         "Include Covariates": include_covariates,
         "Scale Features": not skip_scaling,
@@ -543,7 +303,9 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         "R2": r2,
         "Pearson": pearson_r,
         "Time (s)": time.time() - target_start,
-        "Model file": model_filename
+        "Model file": model_filename,
+        "Feature importance file": feature_importance_file,
+        "Predictions file": predictions_file
     }
     
     # Now retrain the model using ALL data after evaluation
@@ -559,7 +321,11 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     y_all_scaled = y_all_scaler.fit_transform(y_all.reshape(-1, 1)).ravel()
     
     # Refit the feature selection pipeline on all data
-    X_all_selected = pipeline_fs.fit_transform(X_all, y_all_scaled)
+    pipeline_fs.fit(X_all, y_all_scaled, feature_selection__feature_names=predictor_names)
+    X_all_selected = pipeline_fs.transform(X_all)
+    
+    # Save feature importance for all-data model
+    all_feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, f"{target_id}_full")
     
     # Get the indices of selected features from all data
     all_selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
@@ -586,6 +352,21 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     )
     final_regressor.fit(X_all_final, y_all_scaled)
     
+    # Get predictions from the final model on all data
+    all_predictions_scaled = final_regressor.predict(X_all_final)
+    all_predictions = y_all_scaler.inverse_transform(all_predictions_scaled.reshape(-1, 1)).ravel()
+    
+    # Save all-data predictions
+    all_data_pred_df = pd.DataFrame({
+        'set': ['all'] * len(all_predictions),
+        'true_value': y_all,
+        'prediction': all_predictions
+    })
+    
+    all_predictions_file = os.path.join(predictions_dir, f"{target_id}_full_predictions.csv.gz")
+    all_data_pred_df.to_csv(all_predictions_file, index=False, compression='gzip')
+    print(f"Saved full data predictions to {all_predictions_file} (gzip compressed)")
+    
     # Update feature information
     all_feature_types = ['predictor'] * len(all_selected_feature_names)
     all_feature_names = all_selected_feature_names
@@ -598,12 +379,12 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     with open(model_filename, 'wb') as f:
         pickle.dump({
             'model': final_regressor, 
-            'y_scaler': y_all_scaler,  # Note: using the scaler trained on all data
+            'y_scaler': y_all_scaler,
             'target_id': target_id,
             'target_type': 'continuous',
             'include_covariates': include_covariates,
-            'scale_features': not skip_scaling,  # Store the scale_features flag in the model
-            'framework_version': __version__,  # Save framework version
+            'scale_features': not skip_scaling,
+            'framework_version': __version__,
             'feature_info': {
                 'feature_name': all_feature_names,
                 'feature_type': all_feature_types,
@@ -614,9 +395,317 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                 'r2': r2,
                 'pearson': pearson_r
             },
-            'is_full_data_model': True  # Indicate this model was trained on all data
+            'feature_importance_file': feature_importance_file,
+            'all_feature_importance_file': all_feature_importance_file,
+            'predictions_file': predictions_file,
+            'all_predictions_file': all_predictions_file,
+            'is_full_data_model': True
         }, f)
     print(f"Saved regression model (trained on ALL data) to {model_filename}")
+    
+    # Save the result_dict to an individual text file
+    with open(result_filename, 'w') as f:
+        # Format the output as pretty JSON
+        json.dump(result_dict, f, indent=4)
+    print(f"Saved individual result to {result_filename}")
+    
+    return result_dict
+
+def train_classification_model(X_train, X_test, y_train, y_test, 
+                              covs_train, covs_test,
+                              selected_k, predictor_names, covariate_names,
+                              cov_categorical_indices, categorical_indices,
+                              target_name, target_id, target_nlevels, include_covariates,
+                              method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False):
+    """
+    Train a classification model
+    
+    Parameters remain unchanged
+    
+    Returns:
+    --------
+    dict
+        Result dictionary
+    """
+    target_start = time.time()
+    model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
+    result_filename = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
+    
+    # Create directory for predictions
+    predictions_dir = os.path.join(output_dir, 'predictions')
+    os.makedirs(predictions_dir, exist_ok=True)
+    
+    # For classification, we might need to convert y to integer labels
+    if not np.issubdtype(y_train.dtype, np.integer):
+        # Get unique classes and map them to integers
+        classes = np.unique(np.concatenate([y_train, y_test]))
+        class_map = {val: idx for idx, val in enumerate(classes)}
+        y_train_mapped = np.array([class_map[val] for val in y_train])
+        y_test_mapped = np.array([class_map[val] for val in y_test])
+        print(f"Mapped classes: {class_map}")
+    else:
+        class_map = None
+        y_train_mapped = y_train
+        y_test_mapped = y_test
+    
+    # Create a pipeline for X that scales and selects features
+    pipeline_fs = create_feature_selection_pipeline(
+        selected_k=selected_k, 
+        methods=[method],
+        verbose=verbose,
+        gpu=gpu,
+        task='classification',
+        skip_scaling=skip_scaling
+    )
+    
+    # Fit the pipeline on X_train
+    pipeline_fs.fit(X_train, y_train_mapped, feature_selection__feature_names=predictor_names)
+
+    # Transform both training and test sets
+    X_train_selected = pipeline_fs.transform(X_train)
+    X_test_selected = pipeline_fs.transform(X_test)
+    
+    # Save feature importance after fitting
+    feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, target_id)
+    
+    # Get the indices of selected features
+    selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
+    
+    # Get the names of selected features
+    selected_feature_names = predictor_names[selected_feature_indices]
+    
+    # Concatenate the selected features from X with the covariates
+    X_train_final = np.hstack([X_train_selected, covs_train]) if include_covariates else X_train_selected
+    X_test_final = np.hstack([X_test_selected, covs_test]) if include_covariates else X_test_selected
+    
+    # Update categorical indices for the final feature matrix
+    final_categorical_indices = categorical_indices.copy()
+    if include_covariates:
+        for cov_idx in cov_categorical_indices:
+            final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
+            
+    # Initialize and train the classifier on the final training features
+    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+    classifier = TabPFNClassifier(
+        device=device,
+        categorical_features_indices=final_categorical_indices,
+        n_estimators=8
+    )
+    classifier.fit(X_train_final, y_train_mapped)
+    
+    # Feature types list depends on whether covariates are included
+    feature_types = ['predictor'] * len(selected_feature_names)
+    feature_names = selected_feature_names
+    
+    if include_covariates:
+        feature_types.extend(['covariate'] * len(covariate_names))
+        feature_names = np.concatenate([selected_feature_names, covariate_names])
+    
+    # Predict on both training and test sets
+    train_predictions = classifier.predict(X_train_final)
+    test_predictions = classifier.predict(X_test_final)
+    
+    # Get probability outputs for both sets if available
+    try:
+        train_pred_proba = classifier.predict_proba(X_train_final)
+        test_pred_proba = classifier.predict_proba(X_test_final)
+        has_probas = True
+    except Exception as e:
+        print(f"Warning: predict_proba not available or failed: {e}")
+        train_pred_proba = test_pred_proba = None
+        has_probas = False
+    
+    # Map the predictions back to original classes if needed
+    if class_map:
+        reverse_map = {idx: val for val, idx in class_map.items()}
+        train_pred_original = np.array([reverse_map[idx] for idx in train_predictions])
+        test_pred_original = np.array([reverse_map[idx] for idx in test_predictions])
+    else:
+        train_pred_original = train_predictions
+        test_pred_original = test_predictions
+    
+    # Save training and test set predictions
+    train_pred_df = pd.DataFrame({
+        'set': ['train'] * len(train_predictions),
+        'true_value': y_train,
+        'prediction': train_pred_original
+    })
+    
+    test_pred_df = pd.DataFrame({
+        'set': ['test'] * len(test_predictions),
+        'true_value': y_test,
+        'prediction': test_pred_original
+    })
+    
+    # Add probability columns if available
+    if has_probas:
+        for i in range(train_pred_proba.shape[1]):
+            class_name = reverse_map[i] if class_map else i
+            train_pred_df[f'prob_class_{class_name}'] = train_pred_proba[:, i]
+            test_pred_df[f'prob_class_{class_name}'] = test_pred_proba[:, i]
+    
+    # Combine the dataframes
+    all_pred_df = pd.concat([train_pred_df, test_pred_df], ignore_index=True)
+    
+    # Save predictions to file
+    predictions_file = os.path.join(predictions_dir, f"{target_id}_training_predictions.csv.gz")
+    all_pred_df.to_csv(predictions_file, index=False, compression='gzip')
+    print(f"Saved training and test predictions to {predictions_file} (gzip compressed)")
+    
+    # Calculate classification metrics using test set
+    accuracy = accuracy_score(y_test_mapped, test_predictions)
+    
+    # For multi-class, use 'weighted' average
+    average_method = 'binary' if target_nlevels == 2 else 'weighted'
+    
+    try:
+        precision = precision_score(y_test_mapped, test_predictions, average=average_method)
+        recall = recall_score(y_test_mapped, test_predictions, average=average_method)
+        f1 = f1_score(y_test_mapped, test_predictions, average=average_method)
+    except Exception as e:
+        print(f"Warning: Could not calculate some metrics: {e}")
+        precision = recall = f1 = np.nan
+    
+    # Create a confusion matrix
+    cm = confusion_matrix(y_test_mapped, test_predictions)
+    print(f"Confusion matrix:\n{cm}")
+    
+    # Create a dictionary for this target's results
+    result_dict = {
+        "Target": target_name,
+        "Target ID": target_id,
+        "Type": "Classification",
+        "Framework_Version": __version__,
+        "Number of samples": len(y_train) + len(y_test),
+        "Include Covariates": include_covariates,
+        "Scale Features": not skip_scaling,
+        "Classes": target_nlevels,
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall": recall,
+        "F1": f1,
+        "Time (s)": time.time() - target_start,
+        "Model file": model_filename,
+        "Feature importance file": feature_importance_file,
+        "Predictions file": predictions_file
+    }
+    
+    # Now retrain the model using ALL data after evaluation
+    print("Retraining the model using all available data...")
+    
+    # Combine train and test data
+    X_all = np.vstack([X_train, X_test])
+    y_all = np.concatenate([y_train, y_test])
+    covs_all = np.vstack([covs_train, covs_test]) if include_covariates else np.zeros((len(y_all), 0))
+    
+    # Map all labels if needed
+    if class_map is not None:
+        y_all_mapped = np.array([class_map[val] for val in y_all])
+    else:
+        y_all_mapped = y_all
+    
+    # Refit the feature selection pipeline on all data
+    pipeline_fs.fit(X_all, y_all_mapped, feature_selection__feature_names=predictor_names)
+    X_all_selected = pipeline_fs.transform(X_all)
+    
+    # Save feature importance for all-data model
+    all_feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, f"{target_id}_full")
+    
+    # Verify that the same features are selected (they may be different when using all data)
+    all_selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
+    all_selected_feature_names = predictor_names[all_selected_feature_indices]
+    
+    print(f"Selected features using all data: {all_selected_feature_names}")
+    
+    # Prepare final feature matrix
+    X_all_final = np.hstack([X_all_selected, covs_all]) if include_covariates else X_all_selected
+    
+    # Update categorical indices for the all-data feature matrix
+    all_final_categorical_indices = categorical_indices.copy()
+    if include_covariates:
+        for cov_idx in cov_categorical_indices:
+            all_final_categorical_indices.append(X_all_selected.shape[1] + cov_idx)
+    
+    # Initialize and train the final classifier on all data
+    final_classifier = TabPFNClassifier(
+        device=device,
+        categorical_features_indices=all_final_categorical_indices,
+        n_estimators=8
+    )
+    final_classifier.fit(X_all_final, y_all_mapped)
+    
+    # Get predictions for all data
+    all_predictions = final_classifier.predict(X_all_final)
+    
+    # Get probability outputs if available
+    try:
+        all_pred_proba = final_classifier.predict_proba(X_all_final)
+        all_has_probas = True
+    except Exception as e:
+        print(f"Warning: predict_proba not available for all data: {e}")
+        all_pred_proba = None
+        all_has_probas = False
+    
+    # Map predictions back to original classes if needed
+    if class_map:
+        all_pred_original = np.array([reverse_map[idx] for idx in all_predictions])
+    else:
+        all_pred_original = all_predictions
+    
+    # Save all-data predictions
+    all_data_pred_df = pd.DataFrame({
+        'set': ['all'] * len(all_predictions),
+        'true_value': y_all,
+        'prediction': all_pred_original
+    })
+    
+    # Add probability columns if available
+    if all_has_probas:
+        for i in range(all_pred_proba.shape[1]):
+            class_name = reverse_map[i] if class_map else i
+            all_data_pred_df[f'prob_class_{class_name}'] = all_pred_proba[:, i]
+    
+
+    all_predictions_file = os.path.join(predictions_dir, f"{target_id}_full_predictions.csv.gz")
+    all_data_pred_df.to_csv(all_predictions_file, index=False, compression='gzip')
+    print(f"Saved full data predictions to {all_predictions_file} (gzip compressed)")
+
+    # Update feature information
+    all_feature_types = ['predictor'] * len(all_selected_feature_names)
+    all_feature_names = all_selected_feature_names
+    
+    if include_covariates:
+        all_feature_types.extend(['covariate'] * len(covariate_names))
+        all_feature_names = np.concatenate([all_selected_feature_names, covariate_names])
+    
+    # Save the ALL-DATA trained model
+    with open(model_filename, 'wb') as f:
+        pickle.dump({
+            'model': final_classifier, 
+            'class_map': class_map,
+            'target_id': target_id,
+            'target_type': 'discrete',
+            'include_covariates': include_covariates,
+            'scale_features': not skip_scaling,
+            'framework_version': __version__,
+            'feature_info': {
+                'feature_name': all_feature_names,
+                'feature_type': all_feature_types,
+                'categorical_indices': all_final_categorical_indices},
+            'performance': {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1,
+                'confusion_matrix': cm.tolist()
+            },
+            'feature_importance_file': feature_importance_file,
+            'all_feature_importance_file': all_feature_importance_file,
+            'predictions_file': predictions_file,
+            'all_predictions_file': all_predictions_file,
+            'is_full_data_model': True
+        }, f)
+    print(f"Saved classification model (trained on ALL data) to {model_filename}")
     
     # Save the result_dict to an individual text file
     with open(result_filename, 'w') as f:

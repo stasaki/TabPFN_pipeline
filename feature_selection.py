@@ -51,7 +51,6 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         - 'regression': For continuous target variables
         - 'classification': For categorical target variables
     """
-    
     def __init__(self, k=10, random_state=42, methods=None, verbose=0, gpu=True, task='regression'):
         self.k = k
         self.random_state = random_state
@@ -65,7 +64,58 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         self.feature_names_ = None
         self.method_timing_ = {}
         self.total_time_ = None
+        # Add a dictionary to store individual method importance scores
+        self.method_importance_scores_ = {}
+    def fit_transform(self, X, y=None, **fit_params):
+        """
+        Fit to data, then transform it
         
+        Parameters:
+        -----------
+        X : array-like of shape (n_samples, n_features)
+            Input samples.
+        y : array-like of shape (n_samples,) or (n_samples, n_outputs), default=None
+            Target values.
+        **fit_params : dict
+            Additional fit parameters.
+            
+        Returns:
+        --------
+        X_new : array-like of shape (n_samples, n_selected_features)
+            Transformed array.
+        """
+        return self.fit(X, y, **fit_params).transform(X)
+    
+    def transform(self, X):
+        """
+        Reduce X to the selected features
+        
+        Parameters:
+        -----------
+        X : array-like of shape (n_samples, n_features)
+            Input samples.
+            
+        Returns:
+        --------
+        X_r : array-like of shape (n_samples, n_selected_features)
+            The input samples with only the selected features.
+        """
+        if not hasattr(self, 'selected_features_'):
+            raise ValueError('EnsembleFeatureSelector has not been fitted yet.')
+        
+        # Check input dimensions
+        if X.shape[1] != len(self.selected_features_):
+            raise ValueError(f"X has {X.shape[1]} features, but EnsembleFeatureSelector "
+                              f"is expecting {len(self.selected_features_)} features.")
+        
+        # Convert to numpy array if it's a DataFrame
+        if hasattr(X, 'values'):
+            X_arr = X.values
+        else:
+            X_arr = X
+        
+        # Select features using the boolean mask
+        return X_arr[:, self.selected_features_]
     def fit(self, X, y, feature_names=None):
         import time
         start_time = time.time()
@@ -107,6 +157,7 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
             
             # Get selector and feature importance scores
             selector, importance_scores = available_methods[method](X, y)
+            # After getting importance_scores from each method
             self.selectors.append((method, selector))
             
             method_time = time.time() - method_start_time
@@ -114,6 +165,9 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
             
             if self.verbose >= 2:
                 print(f"  {method} completed in {method_time:.2f} seconds")
+            
+            # Store raw importance scores for each method
+            self.method_importance_scores_[method] = importance_scores.copy()
             
             # Normalize importance scores to 0-1 range
             if importance_scores is not None:
@@ -127,7 +181,7 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                         for idx in top_features_idx:
                             print(f"    {self.feature_names_[idx]}: {importance_scores[idx]:.4f}")
         
-        # Store feature importances
+        # Store feature importances - this is the combined importance from all methods
         self.feature_importances_ = feature_importances
         
         # Select top k features based on combined importance
@@ -394,8 +448,58 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
             
         return feature_names[self.selected_features_]
 
+    def save_feature_importance(self, output_dir, target_id):
+        """
+        Save feature importance scores to a gzipped CSV file
+        
+        Parameters:
+        -----------
+        output_dir : str
+            Directory to save the feature importance file
+        target_id : str
+            Target ID for file naming
+        
+        Returns:
+        --------
+        str
+            Path to the saved file
+        """
+        import os
+        import pandas as pd
+        
+        # Create features directory if it doesn't exist
+        features_dir = os.path.join(output_dir, 'features')
+        os.makedirs(features_dir, exist_ok=True)
+        
+        # Create a DataFrame with feature names and combined importance scores
+        importance_data = {
+            'feature_name': self.feature_names_,
+            'combined_importance': self.feature_importances_,
+            'selected': self.selected_features_
+        }
+        
+        # Add individual method importance scores to the DataFrame
+        for method, scores in self.method_importance_scores_.items():
+            importance_data[f'{method}_importance'] = scores
+        
+        importance_df = pd.DataFrame(importance_data)
+        
+        # Sort by combined importance score in descending order
+        importance_df = importance_df.sort_values('combined_importance', ascending=False)
+        
+        # Save to gzipped CSV
+        file_path = os.path.join(features_dir, f"{target_id}_feature_importance.csv.gz")
+        importance_df.to_csv(file_path, index=False, compression='gzip')
+        
+        if self.verbose >= 1:
+            print(f"Saved feature importance scores to {file_path} (gzip compressed)")
+        
+        return file_path
+
+
+
 # Create a pipeline for X that scales and selects features using ensemble approach
-def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=None, verbose=0, gpu=True, task='regression', skip_scaling=False):
+def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=None, verbose=0, gpu=True, task='regression', skip_scaling=False, output_dir=None, target_id=None):
     """
     Create a feature selection pipeline that applies scaling and ensemble feature selection.
     
@@ -424,6 +528,10 @@ def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=No
         - 'classification': For categorical target variables
     skip_scaling : bool, default=False
         If True, skips the StandardScaler step, assuming data is already scaled.
+    output_dir : str, default=None
+        Directory to save feature importance information. If None, won't save.
+    target_id : str, default=None
+        Target ID for file naming when saving feature importance information.
         
     Returns:
     --------
@@ -436,15 +544,17 @@ def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=No
     if not skip_scaling:
         pipeline_steps.append(('scaler', StandardScaler()))
     
-    # Always add feature selection
-    pipeline_steps.append(('feature_selection', EnsembleFeatureSelector(
+    # Add feature selection
+    feature_selector = EnsembleFeatureSelector(
         k=selected_k, 
         random_state=random_state,
         methods=methods,
         verbose=verbose,
         gpu=gpu,
         task=task
-    )))
+    )
+    
+    pipeline_steps.append(('feature_selection', feature_selector))
     
     pipeline_fs = Pipeline(pipeline_steps)
     

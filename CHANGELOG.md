@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.2.0] - 2025-03-08
+
+### Added
+- Feature importance tracking and storage:
+  - Save detailed feature importance scores for all proteins/predictors
+  - Store feature importance information in separate CSV files
+  - Include feature importance file paths in model metadata
+- Prediction outputs for model evaluation:
+  - Save predicted values for both training and test sets during model training
+  - Save predictions from models trained on the full dataset
+  - Include probabilities for classification models
+  - Link prediction files to model metadata
+- Additional result summary information for tracking feature importance and prediction files
+
+### Improved
+- Extended output directories to include 'features' and 'predictions'
+- Enhanced model serialization to include paths to feature importance and prediction files
+- Comprehensive feature importance reporting with selection status and importance scores
+
 ## [1.1.0] - 2025-03-07
 
 ### Added
