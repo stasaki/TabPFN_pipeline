@@ -146,6 +146,7 @@ def main():
                 "Target": r["Target"],
                 "Target ID": r["Target ID"],
                 "Type": "Regression",
+                "Framework_Version": __version__,  # Add version here
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Samples": r["Number of samples"],
@@ -161,6 +162,7 @@ def main():
                 "Target": r["Target"],
                 "Target ID": r["Target ID"],
                 "Type": "Classification",
+                "Framework_Version": __version__,  # Add version here
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Samples": r["Number of samples"],

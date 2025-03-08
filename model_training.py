@@ -13,6 +13,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.model_selection import GroupShuffleSplit
 from tabpfn import TabPFNRegressor, TabPFNClassifier
+from main import __version__
 
 from feature_selection import create_feature_selection_pipeline
 from data_loader import check_existing_results, load_existing_result
@@ -315,6 +316,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         "Target": target_name,
         "Target ID": target_id,
         "Type": "Classification",
+        "Framework_Version": __version__,  # Add version to results
         "Number of samples": len(y_train) + len(y_test),
         "Include Covariates": include_covariates,
         "Scale Features": not skip_scaling,
@@ -384,6 +386,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             'target_type': 'discrete',
             'include_covariates': include_covariates,
             'scale_features': not skip_scaling,  # Store the scale_features flag in the model
+            'framework_version': __version__,  # Save framework version
             'feature_info': {
                 'feature_name': all_feature_names,
                 'feature_type': all_feature_types,
@@ -531,6 +534,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         "Target": target_name,
         "Target ID": target_id,
         "Type": "Regression",
+        "Framework_Version": __version__,  # Add version to results
         "Number of samples": len(y_train) + len(y_test),
         "Include Covariates": include_covariates,
         "Scale Features": not skip_scaling,
@@ -599,6 +603,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             'target_type': 'continuous',
             'include_covariates': include_covariates,
             'scale_features': not skip_scaling,  # Store the scale_features flag in the model
+            'framework_version': __version__,  # Save framework version
             'feature_info': {
                 'feature_name': all_feature_names,
                 'feature_type': all_feature_types,
