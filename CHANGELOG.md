@@ -1,5 +1,14 @@
 # Changelog
 
+
+## [1.3.0] - 2025-03-08
+
+### Added
+- Sample ID tracking in prediction outputs:
+  - Include sample IDs in training and testing prediction files
+  - Include sample IDs in full dataset prediction files
+- Enhanced traceability of model predictions back to original samples
+
 ## [1.2.0] - 2025-03-08
 
 ### Added

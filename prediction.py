@@ -305,7 +305,7 @@ def make_predictions(data_dir, models_dir, output_dir=None, force_covariates_mod
     # Load data with covariates if needed (only if we have models to process)
     if model_files:
         print(f"Loading data with include_covariates={covariates_needed}")
-        data = load_data(data_dir, covariates_needed)
+        data = load_data(data_dir, covariates_needed, prediction_only=True)
     else:
         return
     

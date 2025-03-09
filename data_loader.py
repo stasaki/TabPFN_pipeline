@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import os
 
-def load_data(data_dir='../data', include_covariates=False):
+def load_data(data_dir='../data', include_covariates=False, prediction_only=False):
     """
     Load data from specified directory
     
@@ -15,6 +15,8 @@ def load_data(data_dir='../data', include_covariates=False):
         Directory containing data files
     include_covariates : bool, default=False
         Whether to include covariates in the data
+    prediction_only : bool, default=False
+        If True, only loads predictor data and optionally covariates, skipping targets
         
     Returns:
     --------
@@ -49,21 +51,29 @@ def load_data(data_dir='../data', include_covariates=False):
         print(f"Error loading predictors data: {e}")
         raise
 
-    # Load Y.txt (targets)
-    try:
-        Y_df = pd.read_csv(f'{data_dir}/targets.txt.gz', delimiter='\t') 
-        Y_sample_id = Y_df.iloc[:, 0]  # Get the sample ID column
-        Y_df = Y_df.iloc[:, 1:]  # Remove sample ID column
-        Y_annot_df = pd.read_csv(f'{data_dir}/target_annotation.txt', delimiter='\t')
-        print(f"Loaded Y data: {Y_df.shape[1]} targets, {Y_df.shape[0]} samples")
-        
-        data['Y_df'] = Y_df
-        data['Y_annot_df'] = Y_annot_df
-        data['Y_sample_id'] = Y_sample_id
-        
-    except Exception as e:
-        print(f"Error loading target data: {e}")
-        raise
+    # Skip loading targets if prediction_only mode is enabled
+    if not prediction_only:
+        # Load Y.txt (targets)
+        try:
+            Y_df = pd.read_csv(f'{data_dir}/targets.txt.gz', delimiter='\t') 
+            Y_sample_id = Y_df.iloc[:, 0]  # Get the sample ID column
+            Y_df = Y_df.iloc[:, 1:]  # Remove sample ID column
+            Y_annot_df = pd.read_csv(f'{data_dir}/target_annotation.txt', delimiter='\t')
+            print(f"Loaded Y data: {Y_df.shape[1]} targets, {Y_df.shape[0]} samples")
+            
+            data['Y_df'] = Y_df
+            data['Y_annot_df'] = Y_annot_df
+            data['Y_sample_id'] = Y_sample_id
+            
+        except Exception as e:
+            print(f"Error loading target data: {e}")
+            raise
+    else:
+        # Create empty placeholders for Y data in prediction-only mode
+        print("Prediction-only mode: Skipping target data loading")
+        data['Y_df'] = pd.DataFrame()
+        data['Y_annot_df'] = pd.DataFrame()
+        data['Y_sample_id'] = None
 
     # Load Covs.txt (covariates) if covariates are to be included
     if include_covariates:
@@ -85,14 +95,23 @@ def load_data(data_dir='../data', include_covariates=False):
             print(f"Error loading covariate data: {e}")
             raise
         
-        # Verify sample IDs match across datasets
-        try:
-            assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
-            assert np.all(sample_id == Covs_sample_id), "Sample IDs don't match between X and Covs"
-            print("Sample ID verification successful")
-        except AssertionError as e:
-            print(f"Error: {e}")
-            raise
+        # Verify sample IDs match across datasets (modified for prediction_only mode)
+        if not prediction_only:
+            try:
+                assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
+                assert np.all(sample_id == Covs_sample_id), "Sample IDs don't match between X and Covs"
+                print("Sample ID verification successful")
+            except AssertionError as e:
+                print(f"Error: {e}")
+                raise
+        else:
+            # In prediction-only mode, only verify X and Covs match
+            try:
+                assert np.all(sample_id == Covs_sample_id), "Sample IDs don't match between X and Covs"
+                print("Sample ID verification successful")
+            except AssertionError as e:
+                print(f"Error: {e}")
+                raise
     else:
         # Create empty covariates if not including them
         Covs = np.zeros((X.shape[0], 0))
@@ -103,13 +122,14 @@ def load_data(data_dir='../data', include_covariates=False):
         data['covariate_names'] = covariate_names
         data['Covs_annot_df'] = Covs_annot_df
         
-        # Verify sample IDs match between X and Y only
-        try:
-            assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
-            print("Sample ID verification successful")
-        except AssertionError as e:
-            print(f"Error: {e}")
-            raise
+        # Verify sample IDs match between X and Y only (skip if prediction_only)
+        if not prediction_only:
+            try:
+                assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
+                print("Sample ID verification successful")
+            except AssertionError as e:
+                print(f"Error: {e}")
+                raise
     
     return data
 

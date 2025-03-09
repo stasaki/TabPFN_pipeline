@@ -108,6 +108,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         X_train, X_test = X_valid[train_idx], X_valid[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
         covs_train, covs_test = covs_valid[train_idx], covs_valid[test_idx] if include_covariates else (np.zeros((len(train_idx), 0)), np.zeros((len(test_idx), 0)))
+        sample_id_train, sample_id_test = sample_id_valid.iloc[train_idx], sample_id_valid.iloc[test_idx]
         
         # Verify the split respects person_ids
         train_people = set(person_ids.iloc[train_idx])
@@ -127,6 +128,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
             result_dict = train_regression_model(
                 X_train, X_test, y_train, y_test,
                 covs_train, covs_test,
+                sample_id_train, sample_id_test,  # Pass sample IDs
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, include_covariates,
@@ -138,6 +140,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
             result_dict = train_classification_model(
                 X_train, X_test, y_train, y_test,
                 covs_train, covs_test,
+                sample_id_train, sample_id_test,  # Pass sample IDs
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, target_nlevels, include_covariates,
@@ -170,6 +173,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
 
 def train_regression_model(X_train, X_test, y_train, y_test, 
                            covs_train, covs_test,
+                           sample_id_train, sample_id_test,  # Added sample IDs parameters
                            selected_k, predictor_names, covariate_names,
                            cov_categorical_indices, categorical_indices,
                            target_name, target_id, include_covariates,
@@ -257,17 +261,16 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     train_predictions = y_scaler.inverse_transform(train_predictions_scaled.reshape(-1, 1)).ravel()
     test_predictions = y_scaler.inverse_transform(test_predictions_scaled.reshape(-1, 1)).ravel()
     
-    # Save training and test set predictions
-    train_ids = np.arange(len(train_predictions))  # Using indices as placeholders
-    test_ids = np.arange(len(test_predictions))    # Replace with actual IDs if available
-    
+    # Save training and test set predictions with sample IDs
     train_pred_df = pd.DataFrame({
+        'sample_id': sample_id_train,  # Add sample IDs
         'set': ['train'] * len(train_predictions),
         'true_value': y_train,
         'prediction': train_predictions
     })
     
     test_pred_df = pd.DataFrame({
+        'sample_id': sample_id_test,  # Add sample IDs
         'set': ['test'] * len(test_predictions),
         'true_value': y_test,
         'prediction': test_predictions
@@ -315,6 +318,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     X_all = np.vstack([X_train, X_test])
     y_all = np.concatenate([y_train, y_test])
     covs_all = np.vstack([covs_train, covs_test]) if include_covariates else np.zeros((len(y_all), 0))
+    sample_id_all = pd.concat([sample_id_train, sample_id_test]).reset_index(drop=True)  # Combine sample IDs
     
     # Scale all targets together
     y_all_scaler = StandardScaler()
@@ -356,8 +360,9 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     all_predictions_scaled = final_regressor.predict(X_all_final)
     all_predictions = y_all_scaler.inverse_transform(all_predictions_scaled.reshape(-1, 1)).ravel()
     
-    # Save all-data predictions
+    # Save all-data predictions with sample IDs
     all_data_pred_df = pd.DataFrame({
+        'sample_id': sample_id_all,  # Add sample IDs
         'set': ['all'] * len(all_predictions),
         'true_value': y_all,
         'prediction': all_predictions
@@ -413,6 +418,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
 
 def train_classification_model(X_train, X_test, y_train, y_test, 
                               covs_train, covs_test,
+                              sample_id_train, sample_id_test,  # Added sample IDs parameters
                               selected_k, predictor_names, covariate_names,
                               cov_categorical_indices, categorical_indices,
                               target_name, target_id, target_nlevels, include_covariates,
@@ -524,14 +530,16 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         train_pred_original = train_predictions
         test_pred_original = test_predictions
     
-    # Save training and test set predictions
+    # Save training and test set predictions with sample IDs
     train_pred_df = pd.DataFrame({
+        'sample_id': sample_id_train,  # Add sample IDs
         'set': ['train'] * len(train_predictions),
         'true_value': y_train,
         'prediction': train_pred_original
     })
     
     test_pred_df = pd.DataFrame({
+        'sample_id': sample_id_test,  # Add sample IDs
         'set': ['test'] * len(test_predictions),
         'true_value': y_test,
         'prediction': test_pred_original
@@ -597,6 +605,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     X_all = np.vstack([X_train, X_test])
     y_all = np.concatenate([y_train, y_test])
     covs_all = np.vstack([covs_train, covs_test]) if include_covariates else np.zeros((len(y_all), 0))
+    sample_id_all = pd.concat([sample_id_train, sample_id_test]).reset_index(drop=True)  # Combine sample IDs
     
     # Map all labels if needed
     if class_map is not None:
@@ -652,8 +661,9 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     else:
         all_pred_original = all_predictions
     
-    # Save all-data predictions
+    # Save all-data predictions with sample IDs
     all_data_pred_df = pd.DataFrame({
+        'sample_id': sample_id_all,  # Add sample IDs
         'set': ['all'] * len(all_predictions),
         'true_value': y_all,
         'prediction': all_pred_original
