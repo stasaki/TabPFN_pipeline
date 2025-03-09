@@ -32,17 +32,12 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         predictor_names = X_df.columns[1:]  # Save the predictor column names
         X_df = X_df.iloc[:, 1:]  # Remove sample ID column
         X = X_df.values  # Convert to NumPy array
-        print(f"Loaded X data: {X.shape} features, {X_df.shape[0]} samples")
+        print(f"Loaded X data: {X.shape[1]} features, {X_df.shape[0]} samples")
         
-        # Load predictor IDs if available
-        try:
-            predictor_ids = pd.read_csv(f'{data_dir}/predictor_ids.txt', delimiter='\t')
-            print(f"Loaded predictor ID data: {predictor_ids.shape}")
-            data['predictor_ids'] = predictor_ids
-        except Exception as e:
-            print(f"Warning: Could not load predictor IDs: {e}")
-            predictor_ids = None
-            
+        # Use column names directly as predictor IDs
+        predictor_ids = predictor_names
+        data['predictor_ids'] = predictor_ids
+        
         data['X'] = X
         data['sample_id'] = sample_id
         data['predictor_names'] = predictor_names
@@ -50,7 +45,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     except Exception as e:
         print(f"Error loading predictors data: {e}")
         raise
-
+    
     # Skip loading targets if prediction_only mode is enabled
     if not prediction_only:
         # Load Y.txt (targets)
