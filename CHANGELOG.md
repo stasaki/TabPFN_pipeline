@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.4.0] - 2025-03-11
+
+### Added
+- Predictor group filtering capability:
+  - New `--predictor_group` parameter in main.py for filtering predictors by group during training
+  - Integration with data_loader.py to filter predictors based on predictor annotation
+  - Updated prediction.py to support the same predictor group filtering
+  - Storage of predictor group information in model files and result summaries
+- Enhanced predictor annotation handling:
+  - Support for predictor_annotation.txt with group and type information
+  - Visualization of available predictor groups during execution
+  - Warnings when prediction uses different predictor groups than training
+
+### Improved
+- Data loading process now handles predictor filtering efficiently
+- Model serialization includes predictor group metadata
+- Better error handling when predictor groups don't match between training and prediction
+- Extended documentation for predictor group usage
 
 ## [1.3.0] - 2025-03-08
 

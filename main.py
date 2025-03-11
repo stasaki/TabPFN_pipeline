@@ -8,7 +8,7 @@ import torch
 import numpy as np
 import argparse
 
-from data_loader import load_data, create_output_directories, get_target_lists
+from data_loader import load_data, create_output_directories, get_target_lists, get_predictor_groups
 from model_training import process_target
 from version import __version__
 
@@ -18,8 +18,11 @@ def main():
     parser.add_argument('--include_covariates', action='store_true', help='Include covariates in models')
     parser.add_argument('--method', type=str, default='CatBoost', help='Feature selection method')
     parser.add_argument('--targets', type=str, nargs='+', default=[], help='Specific targets to process')
-    parser.add_argument('--target_group', type=str, default='', choices=['longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope', 'all'], 
-                       help='Target group to process (longitudinal, pathology, omics, demographic, genetic, slope, or all)')
+    parser.add_argument('--target_group', type=str, nargs='+', default=[], 
+                       choices=['longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope', 'all'], 
+                       help='Target groups to process (can specify multiple)')
+    parser.add_argument('--predictor_group', type=str, nargs='+', default=[], 
+                       help='Predictor groups to use (can specify multiple, "all" for all groups)')
     parser.add_argument('--data_dir', type=str, default='../data', help='Directory containing data files')
     parser.add_argument('--output_dir', type=str, default='.', help='Directory for output files')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level')
@@ -44,8 +47,24 @@ def main():
     else:
         print("No GPU detected, using CPU")
     
-    # Load the data
-    data = load_data(args.data_dir, args.include_covariates)
+    # If predictor_group is specified, validate predictor annotation exists first
+    if args.predictor_group:
+        # Check if the predictor annotation file exists
+        predictor_annot_path = os.path.join(args.data_dir, 'predictor_annotation.txt')
+        if not os.path.exists(predictor_annot_path):
+            print(f"Warning: Predictor annotation file not found at {predictor_annot_path}")
+            print("Cannot filter by predictor_group. Will use all predictors.")
+            args.predictor_group = []
+        else:
+            print(f"Using predictor group(s): {', '.join(args.predictor_group)}")
+    
+    # Load the data with predictor group filtering if specified
+    data = load_data(args.data_dir, args.include_covariates, predictor_group=args.predictor_group)
+    
+    # If we successfully loaded predictor annotation, show available groups
+    if 'predictor_annot_df' in data and not data['predictor_annot_df'].empty:
+        available_predictor_groups = get_predictor_groups(data['predictor_annot_df'])
+        print(f"Available predictor groups: {', '.join(available_predictor_groups)}")
     
     # Pre-calculate how many features to select from X:
     # Final feature dimension = (selected features from X) + (number of covariates)
@@ -58,21 +77,39 @@ def main():
     # Get target lists
     target_lists = get_target_lists(data['Y_annot_df'])
     
-    # Use specified targets or select from a target group
+    # Use specified targets or select from target groups
     if args.targets:
         test_targets = args.targets
     elif args.target_group:
-        # If a target group is specified, use the corresponding list
-        if args.target_group in target_lists:
-            test_targets = target_lists[args.target_group]
-            print(f"Using targets from group '{args.target_group}': {len(test_targets)} targets")
-        else:
-            raise ValueError(f"Unknown target group: {args.target_group}")
+        # Initialize an empty list to collect targets from all specified groups
+        test_targets = []
+        
+        # Process each target group
+        for group in args.target_group:
+            if group in target_lists:
+                # Add targets from this group to our collection
+                group_targets = target_lists[group]
+                test_targets.extend(group_targets)
+                print(f"Added {len(group_targets)} targets from group '{group}'")
+            elif group == 'all':
+                # Special case: 'all' means all targets from all groups
+                all_targets = []
+                for g in ['longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope']:
+                    if g in target_lists:
+                        all_targets.extend(target_lists[g])
+                test_targets.extend(all_targets)
+                print(f"Added all {len(all_targets)} targets from all groups")
+            else:
+                raise ValueError(f"Unknown target group: {group}")
+        
+        # Remove duplicates (in case targets appear in multiple groups)
+        test_targets = list(set(test_targets))
+        print(f"Using a total of {len(test_targets)} unique targets from specified groups")
     else:
         # Default targets from original script
         test_targets = ["cts_mmse30", "msex", "age_at_visit"]
         print(f"Using default targets: {test_targets}")
-    
+        
     # Check if all specified targets exist
     missing_targets = [target for target in test_targets if target not in data['Y_df'].columns]
     if missing_targets:
@@ -89,6 +126,9 @@ def main():
     
     total_targets = len(test_targets)
     start_time = time.time()
+    
+    # Save predictor group information for documentation
+    predictor_group_info = args.predictor_group if args.predictor_group else ["all"]
     
     # Loop over each specified target
     for idx, target_name in enumerate(test_targets):
@@ -108,8 +148,12 @@ def main():
             not args.scale_features  # skip_scaling is True when scale_features is False
         )
         
-        # If result is available, add it to the appropriate list
+        # If result is available, add it to the appropriate list and record predictor_group info
         if result_dict:
+            # Add predictor group information
+            result_dict["Predictor Groups"] = predictor_group_info
+            
+            # Store result in appropriate list by type
             if result_dict["Type"] == "Regression":
                 regression_results.append(result_dict)
             elif result_dict["Type"] == "Classification":
@@ -149,6 +193,7 @@ def main():
                 "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
+                "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["R2"],  # R2 as primary metric for regression
                 "Time (s)": r["Time (s)"],
@@ -167,6 +212,7 @@ def main():
                 "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
+                "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["Accuracy"],  # Accuracy as primary metric for classification
                 "Time (s)": r["Time (s)"],

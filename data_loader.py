@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import os
 
-def load_data(data_dir='../data', include_covariates=False, prediction_only=False):
+def load_data(data_dir='../data', include_covariates=False, prediction_only=False, predictor_group=None):
     """
     Load data from specified directory
     
@@ -17,6 +17,9 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         Whether to include covariates in the data
     prediction_only : bool, default=False
         If True, only loads predictor data and optionally covariates, skipping targets
+    predictor_group : str or list, default=None
+        Filter predictors to include only those in the specified group(s)
+        If None, include all predictors
         
     Returns:
     --------
@@ -29,10 +32,52 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     try:
         X_df = pd.read_csv(f'{data_dir}/predictors.txt.gz', delimiter='\t')
         sample_id = X_df.iloc[:, 0]  # Get the first column as sample ID
-        predictor_names = X_df.columns[1:]  # Save the predictor column names
+        predictor_names_all = X_df.columns[1:]  # Save all predictor column names
         X_df = X_df.iloc[:, 1:]  # Remove sample ID column
-        X = X_df.values  # Convert to NumPy array
-        print(f"Loaded X data: {X.shape[1]} features, {X_df.shape[0]} samples")
+        
+        # Load predictor annotation if it exists
+        try:
+            predictor_annot_df = pd.read_csv(f'{data_dir}/predictor_annotation.txt', delimiter='\t')
+            print(f"Loaded predictor annotation: {predictor_annot_df.shape[0]} predictors annotated")
+            data['predictor_annot_df'] = predictor_annot_df
+        except Exception as e:
+            print(f"Note: Could not load predictor annotation file: {e}")
+            predictor_annot_df = None
+            data['predictor_annot_df'] = pd.DataFrame()
+        
+        # Filter predictors by group if specified and annotation is available
+        if predictor_group and predictor_annot_df is not None:
+            # Convert single group to list for consistent handling
+            if isinstance(predictor_group, str):
+                predictor_group = [predictor_group]
+                
+            # Check if 'all' is in the predictor groups
+            if 'all' in predictor_group:
+                # Use all predictors
+                print("Using all predictor groups")
+                filtered_predictors = predictor_names_all
+            else:
+                # Get predictor names that match the specified group(s)
+                mask = predictor_annot_df['predictor_group'].isin(predictor_group)
+                filtered_predictor_names = predictor_annot_df.loc[mask, 'name']
+                
+                # Filter X to include only those predictors
+                filtered_predictors = [col for col in predictor_names_all if col in filtered_predictor_names.values]
+                print(f"Filtered to {len(filtered_predictors)} predictors from group(s): {', '.join(predictor_group)}")
+                
+                if len(filtered_predictors) == 0:
+                    print("Warning: No predictors found in the specified group(s). Using all predictors.")
+                    filtered_predictors = predictor_names_all
+        else:
+            # Use all predictors if no filtering is specified
+            filtered_predictors = predictor_names_all
+            
+        # Filter X_df to include only the selected predictors
+        X_df_filtered = X_df[filtered_predictors]
+        X = X_df_filtered.values  # Convert to NumPy array
+        predictor_names = np.array(filtered_predictors)
+        
+        print(f"Loaded X data: {X.shape[1]} features, {X_df_filtered.shape[0]} samples")
         
         # Use column names directly as predictor IDs
         predictor_ids = predictor_names
@@ -127,6 +172,25 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
                 raise
     
     return data
+
+def get_predictor_groups(predictor_annot_df):
+    """
+    Get unique predictor groups from predictor annotation
+    
+    Parameters:
+    -----------
+    predictor_annot_df : pandas.DataFrame
+        Predictor annotation DataFrame
+        
+    Returns:
+    --------
+    list
+        List of unique predictor groups
+    """
+    if predictor_annot_df is None or len(predictor_annot_df) == 0:
+        return []
+    
+    return sorted(predictor_annot_df['predictor_group'].unique().tolist())
 
 def get_target_lists(Y_annot_df):
     """

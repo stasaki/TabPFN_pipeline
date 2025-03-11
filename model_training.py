@@ -381,6 +381,15 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         all_feature_names = np.concatenate([all_selected_feature_names, covariate_names])
     
     # Save the ALL-DATA trained model
+    predictor_group_info = None
+    if 'predictor_annot_df' in data and not data['predictor_annot_df'].empty:
+        # Get predictor groups used in this model
+        if not data['predictor_annot_df'].empty:
+            used_predictors = all_selected_feature_names
+            mask = data['predictor_annot_df']['name'].isin(used_predictors)
+            predictor_groups = data['predictor_annot_df'].loc[mask, 'predictor_group'].unique().tolist()
+            predictor_group_info = predictor_groups
+    
     with open(model_filename, 'wb') as f:
         pickle.dump({
             'model': final_regressor, 
@@ -390,6 +399,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             'include_covariates': include_covariates,
             'scale_features': not skip_scaling,
             'framework_version': __version__,
+            'predictor_groups': predictor_group_info,
             'feature_info': {
                 'feature_name': all_feature_names,
                 'feature_type': all_feature_types,
@@ -407,6 +417,9 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             'is_full_data_model': True
         }, f)
     print(f"Saved regression model (trained on ALL data) to {model_filename}")
+
+    # Add predictor_groups to result_dict
+    result_dict["Predictor Groups"] = predictor_group_info
     
     # Save the result_dict to an individual text file
     with open(result_filename, 'w') as f:
@@ -689,6 +702,15 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         all_feature_names = np.concatenate([all_selected_feature_names, covariate_names])
     
     # Save the ALL-DATA trained model
+    predictor_group_info = None
+    if 'predictor_annot_df' in data and not data['predictor_annot_df'].empty:
+        # Get predictor groups used in this model
+        if not data['predictor_annot_df'].empty:
+            used_predictors = all_selected_feature_names
+            mask = data['predictor_annot_df']['name'].isin(used_predictors)
+            predictor_groups = data['predictor_annot_df'].loc[mask, 'predictor_group'].unique().tolist()
+            predictor_group_info = predictor_groups
+    
     with open(model_filename, 'wb') as f:
         pickle.dump({
             'model': final_classifier, 
@@ -698,6 +720,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             'include_covariates': include_covariates,
             'scale_features': not skip_scaling,
             'framework_version': __version__,
+            'predictor_groups': predictor_group_info,
             'feature_info': {
                 'feature_name': all_feature_names,
                 'feature_type': all_feature_types,
@@ -715,6 +738,10 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             'all_predictions_file': all_predictions_file,
             'is_full_data_model': True
         }, f)
+    
+    # Add predictor_groups to result_dict
+    result_dict["Predictor Groups"] = predictor_group_info
+    
     print(f"Saved classification model (trained on ALL data) to {model_filename}")
     
     # Save the result_dict to an individual text file

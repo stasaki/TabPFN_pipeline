@@ -23,6 +23,7 @@ This framework provides a comprehensive pipeline for training machine learning m
 - **Person-level Validation**: Ensures train/test splits respect person identity (no data leakage)
 - **TabPFN Models**: Utilizes Transformer-based TabPFN models for accurate tabular data prediction
 - **Target Grouping**: Organizes targets into biological categories (longitudinal, pathology, omics, etc.)
+- **Predictor Grouping**: Filters predictors by biological or functional groups
 - **Prediction Module**: Dedicated module for making predictions with trained models
 - **Comprehensive Importance Scores**: Saves importance scores for all proteins/predictors, not just selected ones
 - **Selection Status**: Tracks which features were selected for the final model
@@ -48,6 +49,7 @@ This framework provides a comprehensive pipeline for training machine learning m
 The framework expects the following data structure in the data directory:
 
 - `predictors.txt.gz`: Predictor variables (e.g., proteins or other omics data)
+- `predictor_annotation.txt`: Metadata for predictors including group and type
 - `predictor_ids.txt`: IDs for predictors (optional)
 - `targets.txt.gz`: Target variables to predict
 - `target_annotation.txt`: Metadata for targets including type and grouping
@@ -71,6 +73,15 @@ The framework organizes targets and features into the following categories:
 ### Feature Categories
 - **predictor**: Features used to predict targets, typically 'omics' data
 - **covariate**: Additional variables that may influence the target, typically 'demographic' data
+
+### Predictor Groups
+The framework now supports filtering predictors by groups defined in the `predictor_annotation.txt` file. This allows you to train models using specific subsets of predictors based on their biological or functional grouping, such as:
+
+- **proteomics**: Protein abundance measurements
+- **metabolomics**: Metabolite measurements
+- **genomics**: Genetic markers
+- **transcriptomics**: RNA expression data
+- And any other custom groups defined in your annotation file
 
 ## Usage
 
@@ -99,6 +110,21 @@ python main.py --target_group omics
 Process all targets from multiple groups:
 ```bash
 python main.py --target_group all
+```
+
+Use specific predictor groups for model training:
+```bash
+python main.py --predictor_group proteomics
+```
+
+Use multiple predictor groups:
+```bash
+python main.py --predictor_group proteomics metabolomics
+```
+
+Use all predictor groups:
+```bash
+python main.py --predictor_group all
 ```
 
 With custom directories:
@@ -130,9 +156,11 @@ python prediction.py --target_ids target1_id target2_id
 - `--method`: Feature selection method (default: 'CatBoost', options: 'MI', 'XGB', 'CatBoost', 'RF')
 - `--targets`: Specific targets to process
 - `--target_group`: Target group to process (choices: 'longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope', 'all')
+- `--predictor_group`: Predictor groups to use for model building (can specify multiple, use 'all' for all groups)
 - `--data_dir`: Directory containing data files (default: '../data')
 - `--output_dir`: Directory for output files (default: '.')
 - `--verbose`: Verbosity level (default: 1)
+- `--scale_features`: Apply StandardScaler to input features (default: False - no scaling)
 
 #### Prediction (prediction.py)
 - `--data_dir`: Directory containing data files (default: '../data')
@@ -140,6 +168,8 @@ python prediction.py --target_ids target1_id target2_id
 - `--output_dir`: Directory to save predictions (default: './predictions')
 - `--force_covariates`: Force using covariates for all models
 - `--force_no_covariates`: Force excluding covariates for all models
+- `--force_scaling`: Force applying scaling for all models
+- `--force_no_scaling`: Force skipping scaling for all models
 - `--no_skip_existing`: Do not skip targets with existing predictions
 - `--target_ids`: Specific target IDs to process
 
@@ -157,7 +187,7 @@ The framework generates the following outputs:
 
 ## Prediction Outputs
 
-The framework now automatically saves predictions during model training:
+The framework automatically saves predictions during model training:
 
 - **Training and Test Sets**: Saves predictions for both training and test sets with true values for comparison
 - **Full Dataset Models**: Tracks predictions from models trained on the complete dataset
@@ -210,6 +240,38 @@ Each feature importance file contains:
 - `feature_name`: Name of the predictor/protein
 - `importance_score`: Relative importance score
 - `selected`: Boolean indicating if the feature was selected for the final model
+
+## Predictor Group Filtering
+
+The framework now supports filtering predictors based on their grouping in the annotation file. This is useful for:
+
+1. **Focused Model Building**: Train models using only predictors from specific biological domains
+2. **Group Comparison**: Assess prediction performance across different predictor modalities
+3. **Resource Optimization**: Reduce computational load by using only relevant predictor subsets
+4. **Data Integration**: Incrementally combine predictor groups to evaluate their complementarity
+
+### Predictor Annotation Format
+
+The `predictor_annotation.txt` file should be tab-separated with at minimum these columns:
+- `name`: Predictor name (must match column names in predictors.txt.gz)
+- `predictor_group`: Group classification (e.g., "proteomics", "metabolomics")
+- `type`: Data type ("continuous" or "discrete")
+
+Example:
+```
+name	predictor_group	type
+protein_ABC	proteomics	continuous
+gene_XYZ	genomics	continuous
+metabolite_123	metabolomics	continuous
+```
+
+### Consistency Between Training and Prediction
+
+When using predictor group filtering:
+- Models store information about which predictor groups were used for training
+- Prediction provides warnings when using different predictor groups than training
+- Missing features are zero-filled automatically when needed
+- Performance may be impacted if prediction uses different predictor groups than training
 
 ## Model Training Details
 
