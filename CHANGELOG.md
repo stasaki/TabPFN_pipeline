@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.0] - 2025-03-11
+
+### Added
+- Model saving options:
+  - New `--save_full_model` parameter to control saving of models trained on full data (default: True)
+  - New `--save_train_model` parameter to enable saving of models trained on training data only
+  - Added model metadata to distinguish between full-data and training-data models
+  - Updated result summaries to track model saving preferences
+- Enhanced GPU memory management:
+  - Added dedicated clear_gpu_memory() function for explicit memory cleanup
+  - Implemented explicit model cleanup and garbage collection after feature selection
+  - Added per-method GPU memory clearing to prevent out-of-memory errors
+
+### Improved
+- Better memory efficiency for large feature selection tasks
+- More explicit control over which models are saved
+- Documentation of model types in model files
+
+
 ## [1.4.0] - 2025-03-11
 
 ### Added

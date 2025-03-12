@@ -27,6 +27,10 @@ def main():
     parser.add_argument('--output_dir', type=str, default='.', help='Directory for output files')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level')
     parser.add_argument('--scale_features', action='store_true', help='Apply StandardScaler to input features')
+    parser.add_argument('--save_full_model', action='store_true', default=True, 
+                       help='Save model trained on full data (default: True)')
+    parser.add_argument('--save_train_model', action='store_true', 
+                       help='Save model trained on training data only')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args()
     
@@ -34,6 +38,8 @@ def main():
     print(f"Include covariates in models: {args.include_covariates}")
     print(f"Feature selection method: {args.method}")
     print(f"Scale input features: {args.scale_features}")
+    print(f"Save model trained on full data: {args.save_full_model}")
+    print(f"Save model trained on training data: {args.save_train_model}")
     print(f"Data directory: {args.data_dir}")
     print(f"Output directory: {args.output_dir}")
     
@@ -145,7 +151,9 @@ def main():
             args.verbose, 
             use_gpu,
             args.output_dir,
-            not args.scale_features  # skip_scaling is True when scale_features is False
+            not args.scale_features,  # skip_scaling is True when scale_features is False
+            args.save_full_model,     # Pass option for saving the full model
+            args.save_train_model     # Pass option for saving the training model
         )
         
         # If result is available, add it to the appropriate list and record predictor_group info
@@ -194,6 +202,8 @@ def main():
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "Save Full Model": args.save_full_model,
+                "Save Train Model": args.save_train_model,
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["R2"],  # R2 as primary metric for regression
                 "Time (s)": r["Time (s)"],
@@ -213,6 +223,8 @@ def main():
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "Save Full Model": args.save_full_model,
+                "Save Train Model": args.save_train_model,
                 "Samples": r["Number of samples"],
                 "Primary Metric": r["Accuracy"],  # Accuracy as primary metric for classification
                 "Time (s)": r["Time (s)"],

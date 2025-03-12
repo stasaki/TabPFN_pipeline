@@ -1,2 +1,2 @@
 # Create a new file: version.py
-__version__ = "1.4.0"  # Added predictor group filtering capability
+__version__ = "1.5.0"  # Added model saving options and GPU memory management

@@ -1,14 +1,31 @@
 """
-Feature selection module that provides an ensemble feature selection approach
+Enhanced feature selection module with GPU memory management
 """
 import numpy as np
 import pandas as pd
 import time
+import gc
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, mutual_info_regression, mutual_info_classif
 from sklearn.feature_selection import SelectFromModel
+
+
+def clear_gpu_memory():
+    """
+    Clear GPU memory if CUDA is available.
+    This function should be called after GPU-intensive operations.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            return True
+    except ImportError:
+        pass
+    
+    return False
 
 
 class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
@@ -50,14 +67,18 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         Type of task to perform. Options:
         - 'regression': For continuous target variables
         - 'classification': For categorical target variables
+    clear_gpu_after_method : bool, default=True
+        Whether to clear GPU memory after each method finishes
     """
-    def __init__(self, k=10, random_state=42, methods=None, verbose=0, gpu=True, task='regression'):
+    def __init__(self, k=10, random_state=42, methods=None, verbose=0, gpu=True, 
+                 task='regression', clear_gpu_after_method=True):
         self.k = k
         self.random_state = random_state
         self.methods = methods if methods is not None else ['MI', 'XGB', 'CatBoost', 'RF']
         self.verbose = verbose
         self.gpu = gpu
         self.task = task
+        self.clear_gpu_after_method = clear_gpu_after_method
         self.selectors = []
         self.selected_features_ = None
         self.feature_importances_ = None
@@ -66,56 +87,7 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         self.total_time_ = None
         # Add a dictionary to store individual method importance scores
         self.method_importance_scores_ = {}
-    def fit_transform(self, X, y=None, **fit_params):
-        """
-        Fit to data, then transform it
-        
-        Parameters:
-        -----------
-        X : array-like of shape (n_samples, n_features)
-            Input samples.
-        y : array-like of shape (n_samples,) or (n_samples, n_outputs), default=None
-            Target values.
-        **fit_params : dict
-            Additional fit parameters.
-            
-        Returns:
-        --------
-        X_new : array-like of shape (n_samples, n_selected_features)
-            Transformed array.
-        """
-        return self.fit(X, y, **fit_params).transform(X)
     
-    def transform(self, X):
-        """
-        Reduce X to the selected features
-        
-        Parameters:
-        -----------
-        X : array-like of shape (n_samples, n_features)
-            Input samples.
-            
-        Returns:
-        --------
-        X_r : array-like of shape (n_samples, n_selected_features)
-            The input samples with only the selected features.
-        """
-        if not hasattr(self, 'selected_features_'):
-            raise ValueError('EnsembleFeatureSelector has not been fitted yet.')
-        
-        # Check input dimensions
-        if X.shape[1] != len(self.selected_features_):
-            raise ValueError(f"X has {X.shape[1]} features, but EnsembleFeatureSelector "
-                              f"is expecting {len(self.selected_features_)} features.")
-        
-        # Convert to numpy array if it's a DataFrame
-        if hasattr(X, 'values'):
-            X_arr = X.values
-        else:
-            X_arr = X
-        
-        # Select features using the boolean mask
-        return X_arr[:, self.selected_features_]
     def fit(self, X, y, feature_names=None):
         import time
         start_time = time.time()
@@ -180,6 +152,14 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                         print(f"  Top 5 features by {method}:")
                         for idx in top_features_idx:
                             print(f"    {self.feature_names_[idx]}: {importance_scores[idx]:.4f}")
+            
+            # Clear GPU memory if requested
+            if self.clear_gpu_after_method:
+                if clear_gpu_memory() and self.verbose >= 2:
+                    print(f"  Cleared GPU memory after {method}")
+                
+                # Explicitly run garbage collection to help free memory
+                gc.collect()
         
         # Store feature importances - this is the combined importance from all methods
         self.feature_importances_ = feature_importances
@@ -217,22 +197,6 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                     print(f"  {self.feature_names_[idx]}: {feature_importances[idx]:.4f} ({status})")
         
         return self
-    
-    def _create_mi_selector(self, X, y):
-        """Create and fit Mutual Information selector based on task type"""
-        if self.task == 'regression':
-            # Calculate mutual information scores for regression
-            mi_scores = mutual_info_regression(X, y, random_state=self.random_state)
-        else:
-            # For classification, use mutual_info_classif
-            from sklearn.feature_selection import mutual_info_classif
-            mi_scores = mutual_info_classif(X, y, random_state=self.random_state)
-            
-        # Create a temporary selector to maintain compatibility
-        mi_selector = SelectKBest(score_func=lambda X, y: mi_scores, k='all')
-        mi_selector.fit(X, y)
-        
-        return mi_selector, mi_scores
     
     def _create_xgb_selector(self, X, y):
         """Create and fit XGBoost feature selector with optional GPU support based on task type"""
@@ -282,6 +246,9 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                 print(f"  GPU training failed: {str(e)}")
                 print("  Falling back to CPU training...")
                 
+            # Clear GPU memory before falling back to CPU
+            clear_gpu_memory()
+            
             # Fall back to CPU
             if self.task == 'regression':
                 from xgboost import XGBRegressor
@@ -296,7 +263,15 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         # Create a temporary selector for compatibility
         xgb_selector = SelectFromModel(xgb, prefit=True, threshold=-np.inf)
         
-        return xgb_selector, importance_scores
+        # Clear XGBoost-specific memory 
+        try:
+            # Explicitly delete the model after getting importance scores
+            importance_scores_copy = importance_scores.copy()
+            del xgb
+            gc.collect()
+            return xgb_selector, importance_scores_copy
+        except Exception:
+            return xgb_selector, importance_scores
     
     def _create_catboost_selector(self, X, y):
         """Create and fit CatBoost feature selector with optional GPU support based on task type"""
@@ -349,6 +324,9 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                 print(f"  GPU training failed: {str(e)}")
                 print("  Falling back to CPU training...")
                 
+            # Clear GPU memory before falling back to CPU
+            clear_gpu_memory()
+            
             # Fall back to CPU
             if self.task == 'regression':
                 from catboost import CatBoostRegressor
@@ -363,7 +341,32 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         # Create a temporary selector for compatibility
         cat_selector = SelectFromModel(catboost, prefit=True, threshold=-np.inf)
         
-        return cat_selector, importance_scores
+        # Clear CatBoost-specific memory
+        try:
+            # Explicitly delete the model after getting importance scores
+            importance_scores_copy = importance_scores.copy()
+            del catboost
+            gc.collect()
+            return cat_selector, importance_scores_copy
+        except Exception:
+            return cat_selector, importance_scores
+
+    # Other methods remain the same
+    def _create_mi_selector(self, X, y):
+        """Create and fit Mutual Information selector based on task type"""
+        if self.task == 'regression':
+            # Calculate mutual information scores for regression
+            mi_scores = mutual_info_regression(X, y, random_state=self.random_state)
+        else:
+            # For classification, use mutual_info_classif
+            from sklearn.feature_selection import mutual_info_classif
+            mi_scores = mutual_info_classif(X, y, random_state=self.random_state)
+            
+        # Create a temporary selector to maintain compatibility
+        mi_selector = SelectKBest(score_func=lambda X, y: mi_scores, k='all')
+        mi_selector.fit(X, y)
+        
+        return mi_selector, mi_scores
     
     def _create_rf_selector(self, X, y):
         """Create and fit RandomForest feature selector based on task type"""
@@ -384,51 +387,37 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         # Create a temporary selector for compatibility
         rf_selector = SelectFromModel(rf, prefit=True, threshold=-np.inf)
         
-        return rf_selector, importance_scores
+        # Clear RandomForest-specific memory
+        try:
+            # Explicitly delete the model after getting importance scores
+            importance_scores_copy = importance_scores.copy()
+            del rf
+            gc.collect()
+            return rf_selector, importance_scores_copy
+        except Exception:
+            return rf_selector, importance_scores
     
-    def summary(self):
-        """
-        Returns a detailed summary of the feature selection process.
-        
-        Returns:
-        --------
-        dict
-            Dictionary containing summary information
-        """
-        if not hasattr(self, 'selected_features_'):
-            return {"error": "Selector has not been fitted yet"}
-        
-        # Get indices of selected features
-        selected_indices = np.where(self.selected_features_)[0]
-        
-        # Get feature names and their importance scores
-        selected_features = []
-        for idx in selected_indices:
-            name = self.feature_names_[idx] if hasattr(self, 'feature_names_') else f"feature_{idx}"
-            selected_features.append({
-                "index": idx,
-                "name": name,
-                "importance": self.feature_importances_[idx]
-            })
-        
-        # Sort by importance
-        selected_features = sorted(selected_features, key=lambda x: x["importance"], reverse=True)
-        
-        # Create summary dictionary
-        summary_dict = {
-            "total_features": len(self.selected_features_),
-            "selected_features_count": len(selected_indices),
-            "target_k": self.k,
-            "methods_used": self.methods,
-            "selected_features": selected_features,
-            "method_timing": self.method_timing_ if hasattr(self, 'method_timing_') else None,
-            "total_time": self.total_time_ if hasattr(self, 'total_time_') else None
-        }
-        
-        return summary_dict
+    # The rest of the methods (transform, fit_transform, get_support, etc.) remain unchanged
+    def fit_transform(self, X, y=None, **fit_params):
+        return self.fit(X, y, **fit_params).transform(X)
     
     def transform(self, X):
-        return X[:, self.selected_features_]
+        if not hasattr(self, 'selected_features_'):
+            raise ValueError('EnsembleFeatureSelector has not been fitted yet.')
+        
+        # Check input dimensions
+        if X.shape[1] != len(self.selected_features_):
+            raise ValueError(f"X has {X.shape[1]} features, but EnsembleFeatureSelector "
+                              f"is expecting {len(self.selected_features_)} features.")
+        
+        # Convert to numpy array if it's a DataFrame
+        if hasattr(X, 'values'):
+            X_arr = X.values
+        else:
+            X_arr = X
+        
+        # Select features using the boolean mask
+        return X_arr[:, self.selected_features_]
     
     def get_support(self, indices=False):
         if indices:
@@ -497,9 +486,10 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
         return file_path
 
 
-
 # Create a pipeline for X that scales and selects features using ensemble approach
-def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=None, verbose=0, gpu=True, task='regression', skip_scaling=False, output_dir=None, target_id=None):
+def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=None, verbose=0, 
+                                     gpu=True, task='regression', skip_scaling=False, 
+                                     output_dir=None, target_id=None, clear_gpu_after_method=True):
     """
     Create a feature selection pipeline that applies scaling and ensemble feature selection.
     
@@ -532,6 +522,8 @@ def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=No
         Directory to save feature importance information. If None, won't save.
     target_id : str, default=None
         Target ID for file naming when saving feature importance information.
+    clear_gpu_after_method : bool, default=True
+        Whether to clear GPU memory after each method finishes
         
     Returns:
     --------
@@ -551,7 +543,8 @@ def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=No
         methods=methods,
         verbose=verbose,
         gpu=gpu,
-        task=task
+        task=task,
+        clear_gpu_after_method=clear_gpu_after_method
     )
     
     pipeline_steps.append(('feature_selection', feature_selector))
