@@ -1,6 +1,7 @@
 """
 Module for training and evaluating models
 """
+import sys
 import numpy as np
 import pandas as pd
 import time
@@ -11,12 +12,15 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from tabpfn import TabPFNRegressor, TabPFNClassifier
 from version import __version__
 
 from feature_selection import create_feature_selection_pipeline
-from data_loader import check_existing_results, load_existing_result
+from data_loader import check_existing_results, load_existing_result, get_samples_by_group
+
+# Maximum number of samples TabPFN can handle
+TABPFN_MAX_SAMPLES = 10000
 
 def process_target(data, target_name, include_covariates, selected_k, method="CatBoost", 
                verbose=1, gpu=True, output_dir='.', skip_scaling=False, 
@@ -105,21 +109,114 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
             print(f"Warning: Only {num_samples} samples for target {target_name}. Skipping due to insufficient data.")
             return None
         
-        # Use GroupShuffleSplit to ensure the same person isn't in both train and test
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
-        
-        # Generate indices for train and test sets
-        train_idx, test_idx = next(gss.split(X_valid, y, groups=person_ids))
+        # Determine split method based on test_sample_groups
+        if 'test_sample_groups' in data and data['test_sample_groups'] and 'sample_annot_df' in data and not data['sample_annot_df'].empty:
+            print(f"Using sample group-based split with groups: {', '.join(data['test_sample_groups'])}")
+            
+            # Get mask for samples in the specified test groups
+            test_mask = get_samples_by_group(sample_id_valid, data['sample_annot_df'], data['test_sample_groups'])
+            
+            # If no test samples were found in the specified groups, fall back to GroupShuffleSplit
+            if test_mask is None or sum(test_mask) == 0:
+                print("Warning: No test samples found in the specified groups. Exiting program.")
+                sys.exit(1)  # Exit the program with a non-zero exit code indicating an error
+            else:
+                # Use the test_mask to determine train/test indices
+                test_idx = np.where(test_mask)[0]
+                train_idx = np.where(~test_mask)[0]
+                print(f"Sample group split: {len(train_idx)} train samples, {len(test_idx)} test samples")
+        else:
+            # Use GroupShuffleSplit to ensure the same person isn't in both train and test
+            print("Using person ID-based split")
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
+            train_idx, test_idx = next(gss.split(X_valid, y, groups=person_ids))
         
         # Split the data using these indices
         X_train, X_test = X_valid[train_idx], X_valid[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
         covs_train, covs_test = covs_valid[train_idx], covs_valid[test_idx] if include_covariates else (np.zeros((len(train_idx), 0)), np.zeros((len(test_idx), 0)))
         sample_id_train, sample_id_test = sample_id_valid.iloc[train_idx], sample_id_valid.iloc[test_idx]
+        person_ids_train, person_ids_test = person_ids.iloc[train_idx], person_ids.iloc[test_idx]
+        
+        # Apply TabPFN sampling limit for training data if needed
+        train_sampling_info = None
+        if len(X_train) > TABPFN_MAX_SAMPLES:
+            print(f"Training set exceeds TabPFN limit ({len(X_train)} > {TABPFN_MAX_SAMPLES}). Sampling...")
+            
+            # For classification, use stratified sampling to preserve class distribution
+            stratify = y_train if target_type == 'discrete' and len(np.unique(y_train)) < 10 else None
+            
+            # Sample indices
+            indices = np.arange(len(X_train))
+            _, sampled_indices = train_test_split(
+                indices, 
+                test_size=TABPFN_MAX_SAMPLES,
+                random_state=42,
+                stratify=stratify
+            )
+            
+            # Keep track of original training data size
+            train_sampling_info = {
+                "original_size": len(X_train),
+                "sampled_size": TABPFN_MAX_SAMPLES,
+                "sampling_ratio": TABPFN_MAX_SAMPLES / len(X_train),
+            }
+            
+            # Apply sampling
+            X_train_sampled = X_train[sampled_indices]
+            y_train_sampled = y_train[sampled_indices]
+            covs_train_sampled = covs_train[sampled_indices] if include_covariates else np.zeros((TABPFN_MAX_SAMPLES, 0))
+            sample_id_train_sampled = sample_id_train.iloc[sampled_indices].reset_index(drop=True)
+            
+            print(f"Sampled {TABPFN_MAX_SAMPLES} out of {len(X_train)} training samples")
+            
+            # Replace original data with sampled data
+            X_train = X_train_sampled
+            y_train = y_train_sampled
+            covs_train = covs_train_sampled
+            sample_id_train = sample_id_train_sampled
+        
+        # Apply TabPFN sampling limit for test data if needed
+        test_sampling_info = None
+        if len(X_test) > TABPFN_MAX_SAMPLES:
+            print(f"Test set exceeds TabPFN limit ({len(X_test)} > {TABPFN_MAX_SAMPLES}). Sampling...")
+            
+            # For classification, use stratified sampling to preserve class distribution
+            stratify = y_test if target_type == 'discrete' and len(np.unique(y_test)) < 10 else None
+            
+            # Sample indices
+            indices = np.arange(len(X_test))
+            _, sampled_indices = train_test_split(
+                indices, 
+                test_size=TABPFN_MAX_SAMPLES,
+                random_state=42,
+                stratify=stratify
+            )
+            
+            # Keep track of original test data size
+            test_sampling_info = {
+                "original_size": len(X_test),
+                "sampled_size": TABPFN_MAX_SAMPLES,
+                "sampling_ratio": TABPFN_MAX_SAMPLES / len(X_test),
+            }
+            
+            # Apply sampling
+            X_test_sampled = X_test[sampled_indices]
+            y_test_sampled = y_test[sampled_indices]
+            covs_test_sampled = covs_test[sampled_indices] if include_covariates else np.zeros((TABPFN_MAX_SAMPLES, 0))
+            sample_id_test_sampled = sample_id_test.iloc[sampled_indices].reset_index(drop=True)
+            
+            print(f"Sampled {TABPFN_MAX_SAMPLES} out of {len(X_test)} test samples")
+            
+            # Replace original data with sampled data
+            X_test = X_test_sampled
+            y_test = y_test_sampled
+            covs_test = covs_test_sampled
+            sample_id_test = sample_id_test_sampled
         
         # Verify the split respects person_ids
-        train_people = set(person_ids.iloc[train_idx])
-        test_people = set(person_ids.iloc[test_idx])
+        train_people = set(person_ids_train)
+        test_people = set(person_ids_test)
         overlap = train_people.intersection(test_people)
         print(f"Number of people in both train and test: {len(overlap)}")  # Should be 0
         
@@ -135,7 +232,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
             result_dict = train_regression_model(
                 X_train, X_test, y_train, y_test,
                 covs_train, covs_test,
-                sample_id_train, sample_id_test,  # Pass sample IDs
+                sample_id_train, sample_id_test,
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, include_covariates,
@@ -149,7 +246,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
             result_dict = train_classification_model(
                 X_train, X_test, y_train, y_test,
                 covs_train, covs_test,
-                sample_id_train, sample_id_test,  # Pass sample IDs
+                sample_id_train, sample_id_test,
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, target_nlevels, include_covariates,
@@ -178,6 +275,54 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         import traceback
         traceback.print_exc()
         return None
+        
+
+def sample_data_for_tabpfn(X, y, sample_ids=None, max_samples=TABPFN_MAX_SAMPLES, random_state=42):
+    """
+    Sample data if it exceeds TabPFN's limit
+    
+    Parameters:
+    -----------
+    X : numpy.ndarray
+        Feature matrix
+    y : numpy.ndarray
+        Target values
+    sample_ids : pandas.Series or None
+        Sample IDs corresponding to X and y
+    max_samples : int, default=TABPFN_MAX_SAMPLES
+        Maximum number of samples TabPFN can handle
+    random_state : int, default=42
+        Random state for reproducibility
+        
+    Returns:
+    --------
+    tuple
+        Sampled X, y, and optionally sample_ids
+    """
+    if len(X) <= max_samples:
+        # No sampling needed
+        if sample_ids is not None:
+            return X, y, sample_ids
+        return X, y
+    
+    print(f"Sampling {max_samples} out of {len(X)} samples for TabPFN (which has a {max_samples} sample limit)")
+    
+    # Perform sampling
+    if sample_ids is not None:
+        # If we have sample_ids, sample from indices and return corresponding sample_ids
+        indices = np.arange(len(X))
+        sampled_indices = np.sort(np.random.RandomState(random_state).choice(indices, size=max_samples, replace=False))
+        X_sampled = X[sampled_indices]
+        y_sampled = y[sampled_indices]
+        sample_ids_sampled = sample_ids.iloc[sampled_indices].reset_index(drop=True)
+        return X_sampled, y_sampled, sample_ids_sampled
+    else:
+        # If no sample_ids, sample directly from X and y
+        X_sampled, y_sampled = train_test_split(
+            X, y, train_size=max_samples, 
+            random_state=random_state, stratify=y if len(np.unique(y)) < 10 else None
+        )
+        return X_sampled, y_sampled
         
 
 def train_regression_model(X_train, X_test, y_train, y_test, 

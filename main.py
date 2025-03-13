@@ -8,7 +8,7 @@ import torch
 import numpy as np
 import argparse
 
-from data_loader import load_data, create_output_directories, get_target_lists, get_predictor_groups
+from data_loader import load_data, create_output_directories, get_target_lists, get_predictor_groups, get_sample_groups
 from model_training import process_target
 from version import __version__
 
@@ -23,6 +23,8 @@ def main():
                        help='Target groups to process (can specify multiple)')
     parser.add_argument('--predictor_group', type=str, nargs='+', default=[], 
                        help='Predictor groups to use (can specify multiple, "all" for all groups)')
+    parser.add_argument('--test_sample_group', type=str, nargs='+', default=[],
+                       help='Sample groups to use for testing (can specify multiple)')
     parser.add_argument('--data_dir', type=str, default='../data', help='Directory containing data files')
     parser.add_argument('--output_dir', type=str, default='.', help='Directory for output files')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level')
@@ -65,12 +67,22 @@ def main():
             print(f"Using predictor group(s): {', '.join(args.predictor_group)}")
     
     # Load the data with predictor group filtering if specified
-    data = load_data(args.data_dir, args.include_covariates, predictor_group=args.predictor_group)
+    data = load_data(args.data_dir, args.include_covariates, predictor_group=args.predictor_group, 
+                    sample_group=args.test_sample_group if args.test_sample_group else None)
     
     # If we successfully loaded predictor annotation, show available groups
     if 'predictor_annot_df' in data and not data['predictor_annot_df'].empty:
         available_predictor_groups = get_predictor_groups(data['predictor_annot_df'])
         print(f"Available predictor groups: {', '.join(available_predictor_groups)}")
+    
+    # If we successfully loaded sample annotation, show available groups
+    if 'sample_annot_df' in data and not data['sample_annot_df'].empty:
+        available_sample_groups = get_sample_groups(data['sample_annot_df'])
+        print(f"Available sample groups: {', '.join(available_sample_groups)}")
+        
+        # If specific test sample groups were specified, show them
+        if 'test_sample_groups' in data and data['test_sample_groups']:
+            print(f"Using sample groups for testing: {', '.join(data['test_sample_groups'])}")
     
     # Pre-calculate how many features to select from X:
     # Final feature dimension = (selected features from X) + (number of covariates)
@@ -136,6 +148,9 @@ def main():
     # Save predictor group information for documentation
     predictor_group_info = args.predictor_group if args.predictor_group else ["all"]
     
+    # Save sample group information for documentation
+    sample_group_info = args.test_sample_group if args.test_sample_group else ["random_split"]
+    
     # Loop over each specified target
     for idx, target_name in enumerate(test_targets):
         # Show progress
@@ -160,6 +175,9 @@ def main():
         if result_dict:
             # Add predictor group information
             result_dict["Predictor Groups"] = predictor_group_info
+            
+            # Add sample group information
+            result_dict["Test Sample Groups"] = sample_group_info
             
             # Store result in appropriate list by type
             if result_dict["Type"] == "Regression":
@@ -202,6 +220,7 @@ def main():
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
                 "Save Train Model": args.save_train_model,
                 "Samples": r["Number of samples"],
@@ -211,6 +230,13 @@ def main():
                 "Feature importance file": r.get("Feature importance file", ""),
                 "Predictions file": r.get("Predictions file", "")
             }
+            
+            # Add sampling information if present
+            if "Training Sampling" in r:
+                summ["Training Sampling"] = r["Training Sampling"]
+            if "Test Sampling" in r:
+                summ["Test Sampling"] = r["Test Sampling"]
+                
             all_results.append(summ)
 
     if classification_results:
@@ -223,6 +249,7 @@ def main():
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
                 "Save Train Model": args.save_train_model,
                 "Samples": r["Number of samples"],
@@ -232,6 +259,13 @@ def main():
                 "Feature importance file": r.get("Feature importance file", ""),
                 "Predictions file": r.get("Predictions file", "")
             }
+            
+            # Add sampling information if present
+            if "Training Sampling" in r:
+                summ["Training Sampling"] = r["Training Sampling"]
+            if "Test Sampling" in r:
+                summ["Test Sampling"] = r["Test Sampling"]
+                
             all_results.append(summ)
 
     # Save combined results

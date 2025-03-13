@@ -20,6 +20,9 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     predictor_group : str or list, default=None
         Filter predictors to include only those in the specified group(s)
         If None, include all predictors
+    sample_group : str or list, default=None
+        Sample group(s) for test set selection
+        If None, random split will be used
         
     Returns:
     --------
@@ -34,6 +37,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         sample_id = X_df.iloc[:, 0]  # Get the first column as sample ID
         predictor_names_all = X_df.columns[1:]  # Save all predictor column names
         X_df = X_df.iloc[:, 1:]  # Remove sample ID column
+
         
         # Load predictor annotation if it exists
         try:
@@ -170,8 +174,102 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
             except AssertionError as e:
                 print(f"Error: {e}")
                 raise
+
+    # Load sample annotation file if it exists
+    try:
+        sample_annot_df = pd.read_csv(f'{data_dir}/sample_annotation.txt', delimiter='\t')
+        print(f"Loaded sample annotation: {sample_annot_df.shape[0]} samples annotated")
+        
+        # Verify that sample_id is in the first column
+        sample_id_col = sample_annot_df.columns[0]
+        if sample_id_col != 'sample_id':
+            print(f"Warning: First column in sample_annotation.txt is '{sample_id_col}', not 'sample_id'. Renaming.")
+            sample_annot_df = sample_annot_df.rename(columns={sample_id_col: 'sample_id'})
+        
+        # Verify that all loaded sample IDs are in the annotation file
+        missing_samples = set(sample_id) - set(sample_annot_df['sample_id'])
+        if missing_samples:
+            n_missing = len(missing_samples)
+            print(f"Warning: {n_missing} samples in the data are not in sample_annotation.txt")
+            if n_missing < 10:
+                print(f"Missing samples: {list(missing_samples)}")
+                
+        data['sample_annot_df'] = sample_annot_df
+        
+        # Check if sample_group column exists in the annotation
+        if 'sample_group' not in sample_annot_df.columns:
+            print("Warning: 'sample_group' column not found in sample_annotation.txt. Group-based splits unavailable.")
+        else:
+            # Get unique sample groups
+            unique_groups = sample_annot_df['sample_group'].unique()
+            print(f"Available sample groups: {', '.join(unique_groups)}")
+            
+            # Store sample group information
+            if sample_group:
+                if isinstance(sample_group, str):
+                    sample_group = [sample_group]
+                
+                # Validate that specified groups exist
+                invalid_groups = set(sample_group) - set(unique_groups)
+                if invalid_groups:
+                    print(f"Warning: The following specified sample groups are not in the annotation: {invalid_groups}")
+                
+                valid_groups = set(sample_group) & set(unique_groups)
+                if not valid_groups:
+                    print("Warning: None of the specified sample groups are in the annotation. Using random split.")
+                    data['test_sample_groups'] = None
+                else:
+                    print(f"Will use samples from group(s): {', '.join(valid_groups)} for testing")
+                    data['test_sample_groups'] = list(valid_groups)
+            else:
+                data['test_sample_groups'] = None
+                
+    except Exception as e:
+        print(f"Note: Could not load sample annotation file: {e}")
+        data['sample_annot_df'] = pd.DataFrame()
+        data['test_sample_groups'] = None
     
     return data
+
+def get_samples_by_group(sample_ids, sample_annot_df, groups):
+    """
+    Get sample indices for specific groups
+    
+    Parameters:
+    -----------
+    sample_ids : array-like
+        Sample IDs to filter
+    sample_annot_df : pandas.DataFrame
+        Sample annotation DataFrame
+    groups : list
+        List of group names to select
+        
+    Returns:
+    --------
+    numpy.ndarray
+        Boolean mask indicating which samples belong to the specified groups
+    """
+    if sample_annot_df.empty or 'sample_group' not in sample_annot_df.columns or not groups:
+        return None
+    
+    # Convert sample_ids to a pandas Series for easier comparison
+    if not isinstance(sample_ids, pd.Series):
+        sample_ids = pd.Series(sample_ids)
+    
+    # Filter annotation DataFrame to include only the samples in sample_ids
+    valid_annot = sample_annot_df[sample_annot_df['sample_id'].isin(sample_ids)]
+    
+    # Get boolean mask for samples in the specified groups
+    group_mask = valid_annot['sample_group'].isin(groups)
+    
+    # Create a mapping from sample ID to group membership
+    sample_in_group = dict(zip(valid_annot['sample_id'], group_mask))
+    
+    # Map each sample ID to its group membership (True/False)
+    # Default to False for any sample ID not in the annotation
+    mask = sample_ids.map(lambda x: sample_in_group.get(x, False)).values
+    
+    return mask
 
 def get_predictor_groups(predictor_annot_df):
     """
@@ -191,6 +289,25 @@ def get_predictor_groups(predictor_annot_df):
         return []
     
     return sorted(predictor_annot_df['predictor_group'].unique().tolist())
+
+def get_sample_groups(sample_annot_df):
+    """
+    Get unique sample groups from sample annotation
+    
+    Parameters:
+    -----------
+    sample_annot_df : pandas.DataFrame
+        Sample annotation DataFrame
+        
+    Returns:
+    --------
+    list
+        List of unique sample groups
+    """
+    if sample_annot_df is None or len(sample_annot_df) == 0 or 'sample_group' not in sample_annot_df.columns:
+        return []
+    
+    return sorted(sample_annot_df['sample_group'].unique().tolist())
 
 def get_target_lists(Y_annot_df):
     """

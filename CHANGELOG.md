@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.0] - 2025-03-13
+
+### Added
+- Sample group-based test set selection:
+  - New `--test_sample_group` parameter for selecting specific sample groups for testing
+  - Added sample annotation file support (`sample_annotation.txt`) to define sample groups
+  - Integration with train/test split logic to create more realistic evaluation scenarios
+  - Storage of test sample group information in model files and result summaries
+- TabPFN sample size handling:
+  - Automatic detection and handling of datasets exceeding TabPFN's 10,000 sample limit
+
+### Improved
+- Enhanced data loading to incorporate sample group information
+- Added tracking of group information throughout the pipeline
+
 ## [1.5.0] - 2025-03-11
 
 ### Added
