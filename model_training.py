@@ -20,7 +20,7 @@ from data_loader import check_existing_results, load_existing_result
 
 def process_target(data, target_name, include_covariates, selected_k, method="CatBoost", 
                verbose=1, gpu=True, output_dir='.', skip_scaling=False, 
-               save_full_model=True, save_train_model=False):
+               save_full_model=False, save_train_model=False):
     """
     Process a single target
     
@@ -55,7 +55,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         Result dictionary or None if skipped
     """
     target_start = time.time()
-
+        
     # Check if target exists in the data
     if target_name not in data['Y_df'].columns:
         print(f"Warning: Target {target_name} not found in Y data. Skipping.")
@@ -128,7 +128,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         
         # Identify which columns in the covariates are categorical
         cov_categorical_indices = data['Covs_annot_df'].index[data['Covs_annot_df']['type'] == 'discrete'].tolist() if include_covariates else []
-                
+        
         # Process differently based on target type
         if target_type == 'continuous':
             # REGRESSION WORKFLOW
@@ -187,7 +187,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                        cov_categorical_indices, categorical_indices,
                        target_name, target_id, include_covariates,
                        method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False,
-                       data=None, save_full_model=True, save_train_model=False):
+                       data=None, save_full_model=False, save_train_model=False):
     """
     Train a regression model
     
@@ -236,7 +236,9 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         Result dictionary
     """
     target_start = time.time()
-    
+
+
+                
     # Define file paths based on model saving options
     if save_train_model:
         train_model_filename = os.path.join(output_dir, 'models', f"{target_id}_train_model.pkl")
@@ -248,18 +250,12 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     else:
         full_model_filename = None
     
-    # If neither model is being saved, we still need one for results
-    if not save_train_model and not save_full_model:
-        print("Warning: Neither train nor full model will be saved. Setting save_full_model=True for results.")
-        save_full_model = True
-        full_model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
-    
     # The main model file for results will be either the full model or the train model
     if save_full_model:
         model_filename = full_model_filename
     else:
         model_filename = train_model_filename
-    
+
     result_filename = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
     
     # Create directory for predictions
@@ -528,7 +524,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                           cov_categorical_indices, categorical_indices,
                           target_name, target_id, target_nlevels, include_covariates,
                           method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False,
-                          data=None, save_full_model=True, save_train_model=False):
+                          data=None, save_full_model=False, save_train_model=False):
     """
     Train a classification model
     
@@ -590,12 +586,6 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         full_model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
     else:
         full_model_filename = None
-    
-    # If neither model is being saved, we still need one for results
-    if not save_train_model and not save_full_model:
-        print("Warning: Neither train nor full model will be saved. Setting save_full_model=True for results.")
-        save_full_model = True
-        full_model_filename = os.path.join(output_dir, 'models', f"{target_id}_model.pkl")
     
     # The main model file for results will be either the full model or the train model
     if save_full_model:

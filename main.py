@@ -27,7 +27,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='.', help='Directory for output files')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level')
     parser.add_argument('--scale_features', action='store_true', help='Apply StandardScaler to input features')
-    parser.add_argument('--save_full_model', action='store_true', default=True, 
+    parser.add_argument('--save_full_model', action='store_true', default=False, 
                        help='Save model trained on full data (default: True)')
     parser.add_argument('--save_train_model', action='store_true', 
                        help='Save model trained on training data only')
