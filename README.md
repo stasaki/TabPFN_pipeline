@@ -29,7 +29,9 @@ This framework provides a comprehensive pipeline for training machine learning m
 - **Selection Status**: Tracks which features were selected for the final model
 - **Multiple Methods**: Aggregates importance scores from various feature selection algorithms
 - **CSV Export**: Stores feature importance data in easy-to-analyze CSV files
-
+- **SHAP Value Computation**: Calculates and saves SHAP values for model interpretability
+- **Model Explainers**: Specialized explainers for TabPFN and traditional models
+- **Interpretability Tools**: Support for advanced feature importance analysis
  
 ## Installation
 

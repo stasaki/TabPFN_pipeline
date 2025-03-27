@@ -87,9 +87,9 @@ def main():
     # Pre-calculate how many features to select from X:
     # Final feature dimension = (selected features from X) + (number of covariates)
     d_covs = data['Covs'].shape[1]
-    selected_k = 500 - d_covs if args.include_covariates else 500
+    selected_k = 10 - d_covs if args.include_covariates else 10
     if selected_k <= 0:
-        raise ValueError(f"Number of covariates ({d_covs}) is >= 500. Adjust your feature selection parameters.")
+        raise ValueError(f"Number of covariates ({d_covs}) is >= 10. Adjust your feature selection parameters.")
     print(f"Will select {selected_k} features from X to combine with {d_covs} covariates")
     
     # Get target lists

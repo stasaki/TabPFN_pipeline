@@ -15,12 +15,140 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from tabpfn import TabPFNRegressor, TabPFNClassifier
 from version import __version__
+from tabpfn_extensions import interpretability
 
 from feature_selection import create_feature_selection_pipeline
 from data_loader import check_existing_results, load_existing_result, get_samples_by_group
 
 # Maximum number of samples TabPFN can handle
 TABPFN_MAX_SAMPLES = 10000
+
+MODEL_CLS_PATH = "../../Resources/models/tabpfn-v2-classifier.ckpt"
+MODEL_REG_PATH = "../../Resources/models/tabpfn-v2-regressor.ckpt"
+MODEL_CLS_PATH = "auto"
+MODEL_REG_PATH = "auto"
+
+def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir, target_id, n_samples=50, is_classifier=True):
+    """
+    Compute SHAP values for a trained model and save to file.
+    Handles both classification (multi-class) and regression tasks.
+
+    Parameters:
+    -----------
+    model : TabPFNClassifier or TabPFNRegressor or similar model object
+        Trained model.
+    X_test_sample : numpy.ndarray
+        Sample of test data for SHAP value computation (limit to ~50 samples for performance).
+    feature_names : list or numpy.ndarray
+        Names of features.
+    output_dir : str
+        Directory to save SHAP values.
+    target_id : str
+        Target ID for file naming.
+    n_samples : int, default=50
+        Number of samples to use for SHAP computation.
+    is_classifier : bool, default=True
+        Whether the model is a classifier or regressor. This helps determine output labels.
+
+    Returns:
+    --------
+    str or None
+        Path to the saved SHAP values file, or None if an error occurred.
+    """
+    # Limit number of samples to compute SHAP values for
+    if X_test_sample.shape[0] > n_samples:
+        # Randomly select n_samples from X_test_sample
+        idx = np.random.choice(X_test_sample.shape[0], n_samples, replace=False)
+        X_shap = X_test_sample[idx]
+    else:
+        X_shap = X_test_sample
+
+    print(f"Computing SHAP values for {X_shap.shape[0]} samples...")
+
+    # Calculate the number of features
+    n_features = X_shap.shape[1]
+
+    # Calculate required max_evals for the permutation explainer
+    # Note: Some SHAP algorithms might need different settings
+    required_evals = 2 * n_features + 1
+    print(f"Required evaluations (for permutation): {required_evals}")
+
+    try:
+        # Algorithm can be 'permutation' or 'partition', 'kernel', etc. depending on library/model
+        # Ensure the algorithm and parameters are suitable for your specific 'interpretability.shap' source
+        shap_values = interpretability.shap.get_shap_values(
+            estimator=model,
+            test_x=X_shap,
+            attribute_names=feature_names,
+            algorithm="permutation", # Verify this is the correct algorithm name
+            max_evals=required_evals
+        )
+
+        # --- Handle different SHAP value array shapes ---
+        shap_array = shap_values.values
+        shape = shap_array.shape
+        predictor_names = shap_values.feature_names # Get predictor names
+
+        if len(shape) == 3:
+            # Shape is (runs/samples, num_predictors, num_outputs) - Multi-class classification
+            runs, num_predictors, num_outputs = shape
+            if is_classifier:
+                output_labels = [f"class_{i}" for i in range(num_outputs)]
+            else:
+                # If user flagged as regressor but got 3D, treat as multi-output regression
+                print("Warning: SHAP values have 3 dimensions, but is_classifier=False. Assuming multi-output target.")
+                output_labels = [f"output_{i}" for i in range(num_outputs)]
+
+        elif len(shape) == 2:
+            # Shape is (runs/samples, num_predictors) - Regression or Binary Classification (one output)
+            runs, num_predictors = shape
+            num_outputs = 1 # Only one output dimension
+            if is_classifier:
+                 # If user flagged as classifier but got 2D, assume binary output (e.g., prob of class 1)
+                 print("Warning: SHAP values have 2 dimensions, but is_classifier=True. Assuming SHAP for positive class.")
+                 # You might want a more specific label if possible, e.g., model.classes_[1]
+                 output_labels = ["class_1_prob"] # Or a more generic term
+            else:
+                 # Regression case
+                 output_labels = ["target_value"]
+        else:
+            # Handle unexpected shapes
+            raise ValueError(f"Unexpected SHAP values array shape: {shape}. Expected 2 or 3 dimensions.")
+
+        # --- Create tidy DataFrame ---
+        # Ensure variable names match DataFrame columns
+        run_ids = np.repeat(np.arange(runs), num_predictors * num_outputs)
+        predictor_col = np.tile(np.repeat(predictor_names, num_outputs), runs)
+        output_col = np.tile(np.array(output_labels), runs * num_predictors)
+        shap_values_flat = shap_array.reshape(-1) # Flatten the array for the column
+
+        # Build the tidy DataFrame
+        df_tidy = pd.DataFrame({
+            "run": run_ids,          # Corresponds to the sample index in X_shap
+            "predictor": predictor_col, # Feature name
+            "output": output_col,    # Class label or target name
+            "shap_value": shap_values_flat # The SHAP value itself
+        })
+
+        # Create directory for SHAP values
+        shap_dir = os.path.join(output_dir, 'shap_values')
+        os.makedirs(shap_dir, exist_ok=True)
+
+        # Save to gzipped CSV for efficient storage and easy reading
+        shap_file = os.path.join(shap_dir, f"{target_id}_shap_values.csv.gz")
+        df_tidy.to_csv(shap_file, index=False, compression="gzip")
+
+        print(f"Saved SHAP values to {shap_file} (gzip compressed)")
+
+        return shap_file
+
+    except Exception as e:
+        print(f"Error computing or processing SHAP values: {e}")
+        # Optionally add more detailed error logging or traceback
+        import traceback
+        traceback.print_exc()
+        return None
+
 
 def process_target(data, target_name, include_covariates, selected_k, method="CatBoost", 
                verbose=1, gpu=True, output_dir='.', skip_scaling=False, 
@@ -452,6 +580,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     regressor = TabPFNRegressor(
         device=device,
         categorical_features_indices=final_categorical_indices,
+        model_path = MODEL_REG_PATH,
         n_estimators=8  # You can adjust this parameter as needed
     )
     regressor.fit(X_train_final, y_train_scaled)
@@ -502,6 +631,23 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     # Calculate Pearson's correlation coefficient
     pearson_r = np.corrcoef(y_test, test_predictions)[0, 1]
     
+    # Compute SHAP values
+    try:
+        shap_file = compute_and_save_shap_values(
+            regressor, 
+            X_test_final, 
+            feature_names, 
+            output_dir, 
+            target_id, 
+            n_samples=min(50, X_test_final.shape[0]),
+            is_classifier=False
+        )
+        # Add SHAP file to result dictionary
+        result_dict["SHAP values file"] = shap_file
+    except Exception as e:
+        print(f"Warning: Could not compute SHAP values: {e}")
+        shap_file = None
+        
     # If requested, save the training model
     if save_train_model:       
         with open(train_model_filename, 'wb') as f:
@@ -526,7 +672,8 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                 'feature_importance_file': feature_importance_file,
                 'predictions_file': predictions_file,
                 'is_full_data_model': False,
-                'is_train_data_model': True
+                'is_train_data_model': True,
+                'shap_values_file': shap_file
             }, f)
         print(f"Saved regression model (trained on TRAINING data) to {train_model_filename}")
     
@@ -550,7 +697,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     }
 
     # Only retrain the model using ALL data if requested
-    if save_full_model:
+    if save_full_model and (len(X_train) + len(X_test)) <= 10000:
         print("Retraining the regression model using all available data...")
 
         # Combine train and test data
@@ -591,6 +738,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         final_regressor = TabPFNRegressor(
             device=device,
             categorical_features_indices=all_final_categorical_indices,
+            model_path = MODEL_REG_PATH,
             n_estimators=8
         )
         final_regressor.fit(X_all_final, y_all_scaled)
@@ -798,6 +946,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     classifier = TabPFNClassifier(
         device=device,
         categorical_features_indices=final_categorical_indices,
+        model_path = MODEL_CLS_PATH,
         n_estimators=8
     )
     classifier.fit(X_train_final, y_train_mapped)
@@ -880,6 +1029,23 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     # Create a confusion matrix
     cm = confusion_matrix(y_test_mapped, test_predictions)
     print(f"Confusion matrix:\n{cm}")
+
+    # Compute SHAP values
+    try:
+        shap_file = compute_and_save_shap_values(
+            classifier, 
+            X_test_final, 
+            feature_names, 
+            output_dir, 
+            target_id, 
+            n_samples=min(50, X_test_final.shape[0]),
+            is_classifier=True
+        )
+        # Add SHAP file to result dictionary
+        result_dict["SHAP values file"] = shap_file
+    except Exception as e:
+        print(f"Warning: Could not compute SHAP values: {e}")
+        shap_file = None
     
     # If requested, save the training model
     if save_train_model:        
@@ -906,7 +1072,8 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                 'feature_importance_file': feature_importance_file,
                 'predictions_file': predictions_file,
                 'is_full_data_model': False,
-                'is_train_data_model': True
+                'is_train_data_model': True,
+                'shap_values_file': shap_file
             }, f)
         print(f"Saved classification model (trained on TRAINING data) to {train_model_filename}")
     
@@ -933,7 +1100,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     }
     
     # Only retrain the model using ALL data if requested
-    if save_full_model:
+    if save_full_model and (len(X_train) + len(X_test)) <= 10000:
         print("Retraining the model using all available data...")
         
         # Combine train and test data
@@ -974,6 +1141,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         final_classifier = TabPFNClassifier(
             device=device,
             categorical_features_indices=all_final_categorical_indices,
+            model_path = MODEL_CLS_PATH,
             n_estimators=8
         )
         final_classifier.fit(X_all_final, y_all_mapped)

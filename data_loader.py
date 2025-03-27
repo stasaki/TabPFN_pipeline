@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import os
 
-def load_data(data_dir='../data', include_covariates=False, prediction_only=False, predictor_group=None):
+def load_data(data_dir='../data', include_covariates=False, prediction_only=False, predictor_group=None, sample_group=None):
     """
     Load data from specified directory
     

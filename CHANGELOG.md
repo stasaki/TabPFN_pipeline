@@ -1,4 +1,22 @@
 # Changelog
+## [1.7.0] - 2025-03-26
+
+### Added
+- SHAP value computation for model interpretability:
+  - Added two specialized SHAP explainer functions: TabPFN-specific and default explainer
+  - Integrated SHAP value calculation in model training pipeline
+  - Implemented storage of SHAP values in both raw and tidy formats
+  - Added SHAP value file paths to model metadata
+- Enhanced model interpretability:
+  - SHAP values for understanding feature importance
+  - Support for permutation and partition algorithms
+  - Automatic sampling to manage computation time
+  - Memory safety checks for high-dimensional data
+
+### Improved
+- More comprehensive model metadata with feature importance information
+- Better integration with TabPFN extensions for interpretability
+- Added safeguards to prevent excessive memory usage for high-dimensional datasets
 
 ## [1.6.0] - 2025-03-13
 
