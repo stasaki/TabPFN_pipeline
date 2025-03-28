@@ -1,4 +1,23 @@
 # Changelog
+## [1.8.0] - 2025-03-28
+
+### Added
+- New SHAP analysis module for post-training interpretation:
+  - Added `shap_analysis.py` script for computing SHAP values from saved models
+  - Implemented test data recreation using original split strategy
+  - Added support for both person-level and group-based validation splits
+  - Integrated with existing interpretability infrastructure
+  - Added efficient caching to avoid redundant SHAP computation
+- Enhanced command-line interface:
+  - Added `--force` flag to recompute SHAP values even if they exist
+  - Support for processing multiple models in batch mode
+  - Options for limiting number of samples for SHAP computation
+
+### Improved
+- Better memory management during SHAP computation
+- Consistent feature preprocessing with model training pipeline
+- Comprehensive error handling and reporting for batch SHAP processing
+- Support for both single model and batch processing modes
 ## [1.7.1] - 2025-03-27
 
 ### Added

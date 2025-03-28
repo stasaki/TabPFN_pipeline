@@ -10,6 +10,7 @@ This framework provides a comprehensive pipeline for training machine learning m
 ├── model_training.py    # Model training and evaluation logic
 ├── main.py              # Main execution script for training
 ├── prediction.py        # Module for making predictions with trained models
+├── shap_analysis.py     # Module for computing SHAP values from saved models
 ├── requirements.txt     # Package dependencies
 └── README.md            # Project documentation
 ```
@@ -30,6 +31,7 @@ This framework provides a comprehensive pipeline for training machine learning m
 - **Multiple Methods**: Aggregates importance scores from various feature selection algorithms
 - **CSV Export**: Stores feature importance data in easy-to-analyze CSV files
 - **SHAP Value Computation**: Calculates and saves SHAP values for model interpretability
+- **Post-Training SHAP Analysis**: Dedicated module for computing SHAP values from saved models
 - **Model Explainers**: Specialized explainers for TabPFN and traditional models
 - **Interpretability Tools**: Support for advanced feature importance analysis
  
@@ -151,6 +153,35 @@ Predict only specific targets:
 python prediction.py --target_ids target1_id target2_id
 ```
 
+### Computing SHAP Values for Saved Models
+
+The framework includes a dedicated module for computing SHAP values from saved models.
+
+For a single model:
+```bash
+python shap_analysis.py --model_path ./models/target123_model.pkl --data_dir ../data
+```
+
+For multiple models in a directory:
+```bash
+python shap_analysis.py --models_dir ./models --data_dir ../data --output_dir ./shap_values
+```
+
+For specific target IDs:
+```bash
+python shap_analysis.py --models_dir ./models --data_dir ../data --target_ids target123 target456
+```
+
+Force recomputation of existing SHAP values:
+```bash
+python shap_analysis.py --model_path ./models/target123_model.pkl --data_dir ../data --force
+```
+
+Limit the number of samples for SHAP computation:
+```bash
+python shap_analysis.py --model_path ./models/target123_model.pkl --data_dir ../data --n_samples 100
+```
+
 ### Command-line Arguments
 
 #### Training (main.py)
@@ -175,6 +206,15 @@ python prediction.py --target_ids target1_id target2_id
 - `--no_skip_existing`: Do not skip targets with existing predictions
 - `--target_ids`: Specific target IDs to process
 
+#### SHAP Analysis (shap_analysis.py)
+- `--model_path`: Path to a specific model file
+- `--models_dir`: Directory containing model files
+- `--data_dir`: Directory containing data files (default: '../data')
+- `--output_dir`: Directory to save SHAP values (defaults to model directory)
+- `--n_samples`: Maximum number of samples to use for SHAP computation (default: 50)
+- `--target_ids`: Specific target IDs to process
+- `--force`: Force recomputation of SHAP values even if they already exist
+
 ## Output Files
 
 The framework generates the following outputs:
@@ -183,6 +223,7 @@ The framework generates the following outputs:
 - `results/`: Directory containing individual target results (JSON)
 - `features/`: Directory containing feature importance information (CSV)
 - `predictions/`: Directory containing prediction outputs (CSV)
+- `shap_values/`: Directory containing SHAP values for model interpretation
 - `regression_results.csv`: Summary of regression model performances
 - `classification_results.csv`: Summary of classification model performances
 - `all_results_summary.csv`: Combined summary of all results
@@ -214,6 +255,31 @@ Each predictions file contains:
 - `prediction`: The model's prediction
 - For classification: additional `prob_class_X` columns with class probabilities
 
+## SHAP Value Analysis
+
+The framework computes SHAP (SHapley Additive exPlanations) values to understand feature importance and model decisions:
+
+- **During Training**: SHAP values are computed on test data during model training
+- **Post-Training**: SHAP values can be computed for previously saved models using the `shap_analysis.py` module
+- **Algorithm Options**: Supports permutation-based and other SHAP algorithms
+- **Efficient Sampling**: Limits computation to a manageable number of samples for efficiency
+
+### Accessing SHAP Values
+
+SHAP values are stored in a tidy format in the `shap_values` directory:
+
+```
+shap_values/
+  ├── target1_id_shap_values.csv.gz    # SHAP values from training
+  ├── target1_id_shap_values_post.csv.gz  # SHAP values from post-training analysis
+  └── ...
+```
+
+Each SHAP file contains:
+- `run`: Sample index for which the SHAP value was calculated
+- `predictor`: Feature name
+- `output`: Class label or target name
+- `shap_value`: The SHAP value representing feature contribution
 
 ## Feature Selection Details
 
