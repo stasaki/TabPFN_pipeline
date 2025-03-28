@@ -152,7 +152,7 @@ def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir
 
 def process_target(data, target_name, include_covariates, selected_k, method="CatBoost", 
                verbose=1, gpu=True, output_dir='.', skip_scaling=False, 
-               save_full_model=False, save_train_model=False):
+               save_full_model=False, save_train_model=False, compute_shap=False):
     """
     Process a single target
     
@@ -180,6 +180,8 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         Whether to save the model trained on full data
     save_train_model : bool, default=False
         Whether to save the model trained on training data only
+    compute_shap : bool, default=False
+        Whether to compute SHAP values for model interpretability
     
     Returns:
     --------
@@ -207,7 +209,8 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         
         print(f"Target: {target_name}, ID: {target_id}, Type: {target_type}" + 
               (f", levels: {target_nlevels}" if target_nlevels else "") +
-              (f", using pre-scaled data" if skip_scaling else ", scaling data"))
+              (f", using pre-scaled data" if skip_scaling else ", scaling data") +
+              (f", with SHAP values" if compute_shap else ", without SHAP values"))
         
         # Check if results already exist for this target
         if check_existing_results(target_id, output_dir):
@@ -366,7 +369,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
                 target_name, target_id, include_covariates,
                 method, verbose, gpu, output_dir, skip_scaling,
                 data,  # Pass the full data dictionary to access annotations if needed
-                save_full_model, save_train_model  # Pass the model saving options
+                save_full_model, save_train_model, compute_shap  # Pass the model saving and SHAP computation options
             )
             
         elif target_type == 'discrete':
@@ -380,7 +383,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
                 target_name, target_id, target_nlevels, include_covariates,
                 method, verbose, gpu, output_dir, skip_scaling,
                 data,  # Pass the full data dictionary to access annotations if needed
-                save_full_model, save_train_model  # Pass the model saving options
+                save_full_model, save_train_model, compute_shap  # Pass the model saving and SHAP computation options
             )
             
         else:
@@ -460,7 +463,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                        cov_categorical_indices, categorical_indices,
                        target_name, target_id, include_covariates,
                        method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False,
-                       data=None, save_full_model=False, save_train_model=False):
+                       data=None, save_full_model=False, save_train_model=False, compute_shap=False):
     """
     Train a regression model
     
@@ -502,6 +505,8 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         Whether to save the model trained on full data
     save_train_model : bool
         Whether to save the model trained on training data only
+    compute_shap : bool
+        Whether to compute SHAP values for model interpretability
     
     Returns:
     --------
@@ -631,22 +636,28 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     # Calculate Pearson's correlation coefficient
     pearson_r = np.corrcoef(y_test, test_predictions)[0, 1]
     
-    # Compute SHAP values
-    try:
-        shap_file = compute_and_save_shap_values(
-            regressor, 
-            X_test_final, 
-            feature_names, 
-            output_dir, 
-            target_id, 
-            n_samples=min(50, X_test_final.shape[0]),
-            is_classifier=False
-        )
-        # Add SHAP file to result dictionary
-        result_dict["SHAP values file"] = shap_file
-    except Exception as e:
-        print(f"Warning: Could not compute SHAP values: {e}")
-        shap_file = None
+    # Initialize shap_file variable
+    shap_file = None
+    
+    # Compute SHAP values if requested
+    if compute_shap:
+        try:
+            shap_file = compute_and_save_shap_values(
+                regressor, 
+                X_test_final, 
+                feature_names, 
+                output_dir, 
+                target_id, 
+                n_samples=min(50, X_test_final.shape[0]),
+                is_classifier=False
+            )
+            print(f"Computed and saved SHAP values to {shap_file}")
+        except Exception as e:
+            print(f"Warning: Could not compute SHAP values: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("Skipping SHAP value computation as requested")
         
     # If requested, save the training model
     if save_train_model:       
@@ -658,6 +669,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                 'target_type': 'continuous',
                 'include_covariates': include_covariates,
                 'scale_features': not skip_scaling,
+                'compute_shap': compute_shap,
                 'framework_version': __version__,
                 'feature_info': {
                     'feature_name': feature_names,
@@ -686,6 +698,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         "Number of samples": len(y_train) + len(y_test),
         "Include Covariates": include_covariates,
         "Scale Features": not skip_scaling,
+        "Compute SHAP": compute_shap,
         "MSE": mse,
         "MAE": mae,
         "R2": r2,
@@ -695,6 +708,10 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         "Feature importance file": feature_importance_file,
         "Predictions file": predictions_file
     }
+    
+    # Add SHAP file to result dictionary if it was computed
+    if shap_file:
+        result_dict["SHAP values file"] = shap_file
 
     # Only retrain the model using ALL data if requested
     if save_full_model and (len(X_train) + len(X_test)) <= 10000:
@@ -759,6 +776,30 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         all_data_pred_df.to_csv(all_predictions_file, index=False, compression='gzip')
         print(f"Saved full data predictions to {all_predictions_file} (gzip compressed)")
 
+        # Initialize all_shap_file variable
+        all_shap_file = None
+        
+        # Compute SHAP values for full model if requested
+        if compute_shap:
+            try:
+                all_shap_file = compute_and_save_shap_values(
+                    final_regressor, 
+                    X_all_final, 
+                    all_selected_feature_names if not include_covariates else 
+                    np.concatenate([all_selected_feature_names, covariate_names]), 
+                    output_dir, 
+                    f"{target_id}_full", 
+                    n_samples=min(50, X_all_final.shape[0]),
+                    is_classifier=False
+                )
+                print(f"Computed and saved SHAP values for full model to {all_shap_file}")
+            except Exception as e:
+                print(f"Warning: Could not compute SHAP values for full model: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("Skipping SHAP value computation for full model as requested")
+
         # Update feature information
         all_feature_types = ['predictor'] * len(all_selected_feature_names)
         all_feature_names = all_selected_feature_names
@@ -776,6 +817,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                 'target_type': 'continuous',
                 'include_covariates': include_covariates,
                 'scale_features': not skip_scaling,
+                'compute_shap': compute_shap,
                 'framework_version': __version__,
                 'feature_info': {
                     'feature_name': all_feature_names,
@@ -792,7 +834,9 @@ def train_regression_model(X_train, X_test, y_train, y_test,
                 'predictions_file': predictions_file,
                 'all_predictions_file': all_predictions_file,
                 'is_full_data_model': True,
-                'is_train_data_model': False
+                'is_train_data_model': False,
+                'shap_values_file': shap_file,
+                'all_shap_values_file': all_shap_file
             }, f)
         print(f"Saved regression model (trained on ALL data) to {model_filename}")
         # Update the result dictionary with full-data model info
@@ -800,6 +844,10 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             "All Feature importance file": all_feature_importance_file,
             "All Predictions file": all_predictions_file
         })
+        
+        # Add SHAP file to result dictionary if it was computed
+        if all_shap_file:
+            result_dict["All SHAP values file"] = all_shap_file
     
     # Save the result_dict to an individual text file
     with open(result_filename, 'w') as f:
@@ -817,7 +865,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                           cov_categorical_indices, categorical_indices,
                           target_name, target_id, target_nlevels, include_covariates,
                           method="CatBoost", verbose=1, gpu=True, output_dir='.', skip_scaling=False,
-                          data=None, save_full_model=False, save_train_model=False):
+                          data=None, save_full_model=False, save_train_model=False, compute_shap=False):
     """
     Train a classification model
     
@@ -861,6 +909,8 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         Whether to save the model trained on full data
     save_train_model : bool
         Whether to save the model trained on training data only
+    compute_shap : bool
+        Whether to compute SHAP values for model interpretability
     
     Returns:
     --------
@@ -1030,22 +1080,28 @@ def train_classification_model(X_train, X_test, y_train, y_test,
     cm = confusion_matrix(y_test_mapped, test_predictions)
     print(f"Confusion matrix:\n{cm}")
 
-    # Compute SHAP values
-    try:
-        shap_file = compute_and_save_shap_values(
-            classifier, 
-            X_test_final, 
-            feature_names, 
-            output_dir, 
-            target_id, 
-            n_samples=min(50, X_test_final.shape[0]),
-            is_classifier=True
-        )
-        # Add SHAP file to result dictionary
-        result_dict["SHAP values file"] = shap_file
-    except Exception as e:
-        print(f"Warning: Could not compute SHAP values: {e}")
-        shap_file = None
+    # Initialize shap_file variable
+    shap_file = None
+    
+    # Compute SHAP values if requested
+    if compute_shap:
+        try:
+            shap_file = compute_and_save_shap_values(
+                classifier, 
+                X_test_final, 
+                feature_names, 
+                output_dir, 
+                target_id, 
+                n_samples=min(50, X_test_final.shape[0]),
+                is_classifier=True
+            )
+            print(f"Computed and saved SHAP values to {shap_file}")
+        except Exception as e:
+            print(f"Warning: Could not compute SHAP values: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("Skipping SHAP value computation as requested")
     
     # If requested, save the training model
     if save_train_model:        
@@ -1057,6 +1113,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                 'target_type': 'discrete',
                 'include_covariates': include_covariates,
                 'scale_features': not skip_scaling,
+                'compute_shap': compute_shap,
                 'framework_version': __version__,
                 'feature_info': {
                     'feature_name': feature_names,
@@ -1086,6 +1143,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         "Number of samples": len(y_train) + len(y_test),
         "Include Covariates": include_covariates,
         "Scale Features": not skip_scaling,
+        "Compute SHAP": compute_shap,
         "Save Full Model": save_full_model,
         "Save Train Model": save_train_model,
         "Classes": target_nlevels,
@@ -1098,6 +1156,10 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         "Feature importance file": feature_importance_file,
         "Predictions file": predictions_file
     }
+    
+    # Add SHAP file to result dictionary if it was computed
+    if shap_file:
+        result_dict["SHAP values file"] = shap_file
     
     # Only retrain the model using ALL data if requested
     if save_full_model and (len(X_train) + len(X_test)) <= 10000:
@@ -1182,6 +1244,30 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         all_data_pred_df.to_csv(all_predictions_file, index=False, compression='gzip')
         print(f"Saved full data predictions to {all_predictions_file} (gzip compressed)")
 
+        # Initialize all_shap_file variable
+        all_shap_file = None
+        
+        # Compute SHAP values for full model if requested
+        if compute_shap:
+            try:
+                all_shap_file = compute_and_save_shap_values(
+                    final_classifier, 
+                    X_all_final, 
+                    all_selected_feature_names if not include_covariates else 
+                    np.concatenate([all_selected_feature_names, covariate_names]), 
+                    output_dir, 
+                    f"{target_id}_full", 
+                    n_samples=min(50, X_all_final.shape[0]),
+                    is_classifier=True
+                )
+                print(f"Computed and saved SHAP values for full model to {all_shap_file}")
+            except Exception as e:
+                print(f"Warning: Could not compute SHAP values for full model: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("Skipping SHAP value computation for full model as requested")
+
         # Update feature information
         all_feature_types = ['predictor'] * len(all_selected_feature_names)
         all_feature_names = all_selected_feature_names
@@ -1199,6 +1285,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                 'target_type': 'discrete',
                 'include_covariates': include_covariates,
                 'scale_features': not skip_scaling,
+                'compute_shap': compute_shap,
                 'framework_version': __version__,
                 'feature_info': {
                     'feature_name': all_feature_names,
@@ -1216,7 +1303,9 @@ def train_classification_model(X_train, X_test, y_train, y_test,
                 'predictions_file': predictions_file,
                 'all_predictions_file': all_predictions_file,
                 'is_full_data_model': True,
-                'is_train_data_model': False
+                'is_train_data_model': False,
+                'shap_values_file': shap_file,
+                'all_shap_values_file': all_shap_file
             }, f)
         print(f"Saved classification model (trained on ALL data) to {full_model_filename}")
         
@@ -1225,6 +1314,10 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             "All Feature importance file": all_feature_importance_file,
             "All Predictions file": all_predictions_file
         })
+        
+        # Add SHAP file to result dictionary if it was computed
+        if all_shap_file:
+            result_dict["All SHAP values file"] = all_shap_file
     
     # Save the result_dict to an individual text file
     with open(result_filename, 'w') as f:

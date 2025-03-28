@@ -1,4 +1,17 @@
 # Changelog
+## [1.7.1] - 2025-03-27
+
+### Added
+- Added optional SHAP value computation parameter:
+  - New `--compute_shap` flag for `main.py` to control SHAP value computation
+  - Integrated SHAP computation flag in model training and prediction pipeline
+  - Updated model metadata to track SHAP computation preferences
+
+### Improved
+- Better control over model interpretability features through command-line arguments
+- More explicit tracking of SHAP computation status in result files
+- Enhanced documentation of interpretability features in model metadata
+
 ## [1.7.0] - 2025-03-26
 
 ### Added

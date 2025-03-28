@@ -33,6 +33,8 @@ def main():
                        help='Save model trained on full data (default: True)')
     parser.add_argument('--save_train_model', action='store_true', 
                        help='Save model trained on training data only')
+    parser.add_argument('--compute_shap', action='store_true', default=False,
+                       help='Compute SHAP values for model interpretability')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args()
     
@@ -42,6 +44,7 @@ def main():
     print(f"Scale input features: {args.scale_features}")
     print(f"Save model trained on full data: {args.save_full_model}")
     print(f"Save model trained on training data: {args.save_train_model}")
+    print(f"Compute SHAP values: {args.compute_shap}")
     print(f"Data directory: {args.data_dir}")
     print(f"Output directory: {args.output_dir}")
     
@@ -168,7 +171,8 @@ def main():
             args.output_dir,
             not args.scale_features,  # skip_scaling is True when scale_features is False
             args.save_full_model,     # Pass option for saving the full model
-            args.save_train_model     # Pass option for saving the training model
+            args.save_train_model,    # Pass option for saving the training model
+            args.compute_shap         # Pass option for computing SHAP values
         )
         
         # If result is available, add it to the appropriate list and record predictor_group info
@@ -219,6 +223,7 @@ def main():
                 "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
+                "Compute SHAP": args.compute_shap,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
                 "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
@@ -228,7 +233,8 @@ def main():
                 "Time (s)": r["Time (s)"],
                 "Model file": r["Model file"],
                 "Feature importance file": r.get("Feature importance file", ""),
-                "Predictions file": r.get("Predictions file", "")
+                "Predictions file": r.get("Predictions file", ""),
+                "SHAP values file": r.get("SHAP values file", "")
             }
             
             # Add sampling information if present
@@ -248,6 +254,7 @@ def main():
                 "Framework_Version": __version__,
                 "Include Covariates": r.get("Include Covariates", args.include_covariates),
                 "Scale Features": args.scale_features,
+                "Compute SHAP": args.compute_shap,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
                 "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
@@ -257,7 +264,8 @@ def main():
                 "Time (s)": r["Time (s)"],
                 "Model file": r["Model file"],
                 "Feature importance file": r.get("Feature importance file", ""),
-                "Predictions file": r.get("Predictions file", "")
+                "Predictions file": r.get("Predictions file", ""),
+                "SHAP values file": r.get("SHAP values file", "")
             }
             
             # Add sampling information if present
