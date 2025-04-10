@@ -283,6 +283,8 @@ def compute_shap_for_saved_model(model_path, data_dir, output_dir=None, n_sample
         Directory to save SHAP values (defaults to same directory as model)
     n_samples : int, default=50
         Maximum number of samples to use for SHAP computation
+    force : bool, default=False
+        Whether to force recomputation even if SHAP values already exist
         
     Returns:
     --------
@@ -309,15 +311,27 @@ def compute_shap_for_saved_model(model_path, data_dir, output_dir=None, n_sample
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # If SHAP values were already computed during training, check if file exists
-    if not force and 'shap_values_file' in model_data and model_data['shap_values_file']:
-        existing_shap_file = model_data['shap_values_file']
-        if os.path.exists(existing_shap_file):
-            print(f"SHAP values already exist: {existing_shap_file}")
-            print(f"Skipping computation. Use --force flag to recompute if needed.")
-            return existing_shap_file
+    # Expected SHAP file path based on target ID
+    shap_dir = os.path.join(output_dir, 'shap_values')
+    expected_shap_file = os.path.join(shap_dir, f"{target_id}_shap_values.csv.gz")
     
-    # Prepare test data
+    # Check if SHAP values already exist - either from training or previous computations
+    if not force:
+        # Check if SHAP values were computed during training
+        if 'shap_values_file' in model_data and model_data['shap_values_file']:
+            existing_shap_file = model_data['shap_values_file']
+            if os.path.exists(existing_shap_file):
+                print(f"SHAP values already exist (from training): {existing_shap_file}")
+                print(f"Skipping computation. Use --force flag to recompute if needed.")
+                return existing_shap_file
+        
+        # Check if SHAP values were computed separately after training
+        if os.path.exists(expected_shap_file):
+            print(f"SHAP values already exist (from previous computation): {expected_shap_file}")
+            print(f"Skipping computation. Use --force flag to recompute if needed.")
+            return expected_shap_file
+    
+    # If we get here, we need to compute SHAP values
     print(f"Preparing test data from {data_dir}")
     X_final, feature_names, sample_ids = prepare_test_data_for_shap(
         model_data, data_dir, n_samples

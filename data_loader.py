@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import os
 
-def load_data(data_dir='../data', include_covariates=False, prediction_only=False, predictor_group=None, sample_group=None):
+def load_data(data_dir='../data', include_covariates=False, prediction_only=False, predictor_group=None, sample_group=None, drop_all_na=True):
     """
     Load data from specified directory
     
@@ -23,6 +23,8 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     sample_group : str or list, default=None
         Sample group(s) for test set selection
         If None, random split will be used
+    drop_all_na : bool, default=True
+        If True, drops samples where all predictors are NA
         
     Returns:
     --------
@@ -35,6 +37,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     try:
         X_df = pd.read_csv(f'{data_dir}/predictors.txt.gz', delimiter='\t')
         sample_id = X_df.iloc[:, 0]  # Get the first column as sample ID
+        sample_id_column = X_df.columns[0]  # Get name of sample ID column
         predictor_names_all = X_df.columns[1:]  # Save all predictor column names
         X_df = X_df.iloc[:, 1:]  # Remove sample ID column
 
@@ -78,6 +81,25 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
             
         # Filter X_df to include only the selected predictors
         X_df_filtered = X_df[filtered_predictors]
+        
+        # Check for samples with all NA predictors
+        if drop_all_na:
+            # Find rows where all values are NA
+            all_na_mask = X_df_filtered.isna().all(axis=1)
+            num_all_na = all_na_mask.sum()
+            
+            if num_all_na > 0:
+                # Get indices of samples to keep (where not all predictors are NA)
+                keep_indices = ~all_na_mask
+                
+                # Filter X_df, sample_id to remove samples with all NA predictors
+                X_df_filtered = X_df_filtered[keep_indices]
+                sample_id = sample_id[keep_indices]
+                
+                print(f"Dropped {num_all_na} samples where all predictors are NA. {len(sample_id)} samples remaining.")
+            else:
+                print("No samples with all NA predictors found.")
+        
         X = X_df_filtered.values  # Convert to NumPy array
         predictor_names = np.array(filtered_predictors)
         
@@ -89,6 +111,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         
         data['X'] = X
         data['sample_id'] = sample_id
+        data['sample_id_column'] = sample_id_column
         data['predictor_names'] = predictor_names
             
     except Exception as e:
@@ -101,7 +124,17 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         try:
             Y_df = pd.read_csv(f'{data_dir}/targets.txt.gz', delimiter='\t') 
             Y_sample_id = Y_df.iloc[:, 0]  # Get the sample ID column
+            Y_df_full = Y_df.copy()  # Keep a full copy before filtering
+            
+            # Filter Y_df to include only the samples that remain after dropping all-NA samples
+            if drop_all_na:
+                Y_df = Y_df[Y_df.iloc[:, 0].isin(sample_id)]
+                if len(Y_df) < len(Y_df_full):
+                    print(f"Filtered target data to match samples: from {len(Y_df_full)} to {len(Y_df)} samples")
+            
+            Y_sample_id = Y_df.iloc[:, 0]  # Update sample IDs after filtering
             Y_df = Y_df.iloc[:, 1:]  # Remove sample ID column
+            
             Y_annot_df = pd.read_csv(f'{data_dir}/target_annotation.txt', delimiter='\t')
             print(f"Loaded Y data: {Y_df.shape[1]} targets, {Y_df.shape[0]} samples")
             
@@ -123,7 +156,15 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     if include_covariates:
         try:
             Covs_df = pd.read_csv(f'{data_dir}/covs.txt.gz', delimiter='\t')
-            Covs_sample_id = Covs_df.iloc[:, 0]  # Get the sample ID column
+            Covs_df_full = Covs_df.copy()  # Keep a full copy before filtering
+            
+            # Filter Covs_df to include only the samples that remain after dropping all-NA samples
+            if drop_all_na:
+                Covs_df = Covs_df[Covs_df.iloc[:, 0].isin(sample_id)]
+                if len(Covs_df) < len(Covs_df_full):
+                    print(f"Filtered covariate data to match samples: from {len(Covs_df_full)} to {len(Covs_df)} samples")
+            
+            Covs_sample_id = Covs_df.iloc[:, 0]  # Get the sample ID column after filtering
             covariate_names = Covs_df.columns[1:]  # Save the covariate column names
             Covs_df = Covs_df.iloc[:, 1:]  # Remove sample ID column
             Covs = Covs_df.values  # Convert to NumPy array
@@ -142,8 +183,8 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         # Verify sample IDs match across datasets (modified for prediction_only mode)
         if not prediction_only:
             try:
-                assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
-                assert np.all(sample_id == Covs_sample_id), "Sample IDs don't match between X and Covs"
+                assert np.all(np.isin(sample_id, Y_sample_id)), "Not all filtered sample IDs found in Y dataset"
+                assert np.all(np.isin(sample_id, Covs_sample_id)), "Not all filtered sample IDs found in Covs dataset"
                 print("Sample ID verification successful")
             except AssertionError as e:
                 print(f"Error: {e}")
@@ -151,7 +192,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         else:
             # In prediction-only mode, only verify X and Covs match
             try:
-                assert np.all(sample_id == Covs_sample_id), "Sample IDs don't match between X and Covs"
+                assert np.all(np.isin(sample_id, Covs_sample_id)), "Not all filtered sample IDs found in Covs dataset"
                 print("Sample ID verification successful")
             except AssertionError as e:
                 print(f"Error: {e}")
@@ -169,7 +210,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
         # Verify sample IDs match between X and Y only (skip if prediction_only)
         if not prediction_only:
             try:
-                assert np.all(sample_id == Y_sample_id), "Sample IDs don't match between X and Y"
+                assert np.all(np.isin(sample_id, Y_sample_id)), "Not all filtered sample IDs found in Y dataset"
                 print("Sample ID verification successful")
             except AssertionError as e:
                 print(f"Error: {e}")
@@ -178,13 +219,21 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     # Load sample annotation file if it exists
     try:
         sample_annot_df = pd.read_csv(f'{data_dir}/sample_annotation.txt', delimiter='\t')
-        print(f"Loaded sample annotation: {sample_annot_df.shape[0]} samples annotated")
+        sample_annot_df_full = sample_annot_df.copy()  # Keep a full copy before filtering
         
-        # Verify that sample_id is in the first column
-        sample_id_col = sample_annot_df.columns[0]
-        if sample_id_col != 'sample_id':
-            print(f"Warning: First column in sample_annotation.txt is '{sample_id_col}', not 'sample_id'. Renaming.")
-            sample_annot_df = sample_annot_df.rename(columns={sample_id_col: 'sample_id'})
+        # Filter sample_annot_df to include only the samples that remain after dropping all-NA samples
+        if drop_all_na:
+            # Verify that sample_id is in the first column
+            sample_id_col = sample_annot_df.columns[0]
+            if sample_id_col != 'sample_id':
+                print(f"Warning: First column in sample_annotation.txt is '{sample_id_col}', not 'sample_id'. Renaming.")
+                sample_annot_df = sample_annot_df.rename(columns={sample_id_col: 'sample_id'})
+                
+            sample_annot_df = sample_annot_df[sample_annot_df['sample_id'].isin(sample_id)]
+            if len(sample_annot_df) < len(sample_annot_df_full):
+                print(f"Filtered sample annotation to match samples: from {len(sample_annot_df_full)} to {len(sample_annot_df)} samples")
+        
+        print(f"Loaded sample annotation: {sample_annot_df.shape[0]} samples annotated")
         
         # Verify that all loaded sample IDs are in the annotation file
         missing_samples = set(sample_id) - set(sample_annot_df['sample_id'])
@@ -231,6 +280,7 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
     
     return data
 
+# Other functions remain the same
 def get_samples_by_group(sample_ids, sample_annot_df, groups):
     """
     Get sample indices for specific groups

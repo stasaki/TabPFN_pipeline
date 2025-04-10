@@ -581,7 +581,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
             
     # Initialize and train the regressor on the final training features
-    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+    device = "cuda:3" if gpu and torch.cuda.is_available() else "cpu"
     regressor = TabPFNRegressor(
         device=device,
         categorical_features_indices=final_categorical_indices,
@@ -992,7 +992,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
             
     # Initialize and train the classifier on the final training features
-    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+    device = "cuda:3" if gpu and torch.cuda.is_available() else "cpu"
     classifier = TabPFNClassifier(
         device=device,
         categorical_features_indices=final_categorical_indices,
