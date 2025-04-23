@@ -99,7 +99,14 @@ def load_data(data_dir='../data', include_covariates=False, prediction_only=Fals
                 print(f"Dropped {num_all_na} samples where all predictors are NA. {len(sample_id)} samples remaining.")
             else:
                 print("No samples with all NA predictors found.")
-        
+
+        # Filter predictor_annot_df to match filtered predictors
+        if predictor_annot_df is not None and len(filtered_predictors) < len(predictor_names_all):
+            predictor_annot_df = predictor_annot_df[predictor_annot_df['name'].isin(filtered_predictors)]
+            predictor_annot_df = predictor_annot_df.reset_index(drop=True)
+            data['predictor_annot_df'] = predictor_annot_df
+            print(f"Filtered predictor annotation to {predictor_annot_df.shape[0]} entries")
+            
         X = X_df_filtered.values  # Convert to NumPy array
         predictor_names = np.array(filtered_predictors)
         

@@ -352,8 +352,20 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         print(f"Number of people in both train and test: {len(overlap)}")  # Should be 0
         
         # Determine categorical features based on Covs_annot_df
-        categorical_indices = []
-        
+        categorical_indices = data['predictor_annot_df'].index[data['predictor_annot_df']['type'] == 'discrete'].tolist() 
+
+        # Stop the program if categorical features are detected
+        if len(categorical_indices) > 0:
+            print(f"Detected {len(categorical_indices)} categorical features: {categorical_indices}")
+            print("CatBoost handling for categorical features is not currently supported. Aborting.")
+            print("Categorical feature names:")
+            for idx in categorical_indices:
+                print( data['predictor_annot_df'].iloc[idx])
+            
+            # You can either exit the program
+            import sys
+            sys.exit(1)
+    
         # Identify which columns in the covariates are categorical
         cov_categorical_indices = data['Covs_annot_df'].index[data['Covs_annot_df']['type'] == 'discrete'].tolist() if include_covariates else []
         
@@ -543,7 +555,8 @@ def train_regression_model(X_train, X_test, y_train, y_test,
     # Scale y: create a separate scaler for the target variable
     y_scaler = StandardScaler()
     y_train_scaled = y_scaler.fit_transform(y_train.reshape(-1, 1)).ravel()
-    
+
+
     # Create a pipeline for X that scales and selects features
     pipeline_fs = create_feature_selection_pipeline(
         selected_k=selected_k, 
@@ -551,7 +564,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
         verbose=verbose,
         gpu=gpu,
         task='regression',
-        skip_scaling=skip_scaling
+        skip_scaling=skip_scaling,
     )
     
     # Fit the pipeline on X_train
@@ -581,7 +594,7 @@ def train_regression_model(X_train, X_test, y_train, y_test,
             final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
             
     # Initialize and train the regressor on the final training features
-    device = "cuda:3" if gpu and torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
     regressor = TabPFNRegressor(
         device=device,
         categorical_features_indices=final_categorical_indices,
@@ -954,7 +967,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
         class_map = None
         y_train_mapped = y_train
         y_test_mapped = y_test
-    
+
     # Create a pipeline for X that scales and selects features
     pipeline_fs = create_feature_selection_pipeline(
         selected_k=selected_k, 
@@ -992,7 +1005,7 @@ def train_classification_model(X_train, X_test, y_train, y_test,
             final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
             
     # Initialize and train the classifier on the final training features
-    device = "cuda:3" if gpu and torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
     classifier = TabPFNClassifier(
         device=device,
         categorical_features_indices=final_categorical_indices,

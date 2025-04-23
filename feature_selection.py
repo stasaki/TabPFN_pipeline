@@ -41,6 +41,7 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
     -----------
     k : int, default=10
         Number of top features to select overall.
+        If k=0, no features will be selected (for covariates-only models).
     random_state : int, default=42
         Random seed for reproducibility.
     methods : list, default=['MI', 'XGB', 'CatBoost', 'RF']
@@ -99,6 +100,24 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
             self.feature_names_ = np.array(X.columns)
         else:
             self.feature_names_ = np.array([f"feature_{i}" for i in range(X.shape[1])])
+        
+        # Special case: if k=0, select no features (for covariates-only models)
+        if self.k == 0:
+            if self.verbose >= 1:
+                print(f"Feature selection k=0: Selecting NO features (covariates-only model)")
+            
+            # Set all feature importances to 0
+            self.feature_importances_ = np.zeros(X.shape[1])
+            
+            # Select no features
+            self.selected_features_ = np.zeros(X.shape[1], dtype=bool)
+            
+            # Still initialize method_importance_scores_ with zeros for compatibility
+            for method in self.methods:
+                self.method_importance_scores_[method] = np.zeros(X.shape[1])
+                
+            self.total_time_ = time.time() - start_time
+            return self
             
         if self.verbose >= 1:
             print(f"Starting feature selection with {len(self.methods)} methods: {', '.join(self.methods)}")
@@ -292,7 +311,8 @@ class EnsembleFeatureSelector(BaseEstimator, TransformerMixin):
                 
         if gpu_settings and self.verbose >= 1:
             print(f"  Training CatBoost ({self.task}) with GPU acceleration...")
-            
+
+        
         # Choose model based on task
         if self.task == 'regression':
             from catboost import CatBoostRegressor
@@ -497,6 +517,7 @@ def create_feature_selection_pipeline(selected_k=10, random_state=42, methods=No
     -----------
     selected_k : int, default=10
         Number of top features to select overall.
+        If selected_k=0, no features will be selected (for covariates-only models).
     random_state : int, default=42
         Random seed for reproducibility.
     methods : list, default=None

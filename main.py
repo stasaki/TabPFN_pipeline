@@ -16,6 +16,8 @@ def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Train models on target variables')
     parser.add_argument('--include_covariates', action='store_true', help='Include covariates in models')
+    parser.add_argument('--covariates_only', action='store_true', help='Use only covariates, no predictors (sets selected_k=0)')
+    parser.add_argument('--selected_k', type=int, default=None, help='Number of predictors to select (default is calculated based on covariates)')
     parser.add_argument('--method', type=str, default='CatBoost', help='Feature selection method')
     parser.add_argument('--targets', type=str, nargs='+', default=[], help='Specific targets to process')
     parser.add_argument('--target_group', type=str, nargs='+', default=[], 
@@ -40,6 +42,10 @@ def main():
     
     # Print configuration
     print(f"Include covariates in models: {args.include_covariates}")
+    if args.covariates_only:
+        print("COVARIATES-ONLY MODE: Using only covariates, no predictors (selected_k=0)")
+        args.include_covariates = True  # Force covariates to be included
+        
     print(f"Feature selection method: {args.method}")
     print(f"Scale input features: {args.scale_features}")
     print(f"Save model trained on full data: {args.save_full_model}")
@@ -87,13 +93,29 @@ def main():
         if 'test_sample_groups' in data and data['test_sample_groups']:
             print(f"Using sample groups for testing: {', '.join(data['test_sample_groups'])}")
     
-    # Pre-calculate how many features to select from X:
-    # Final feature dimension = (selected features from X) + (number of covariates)
-    d_covs = data['Covs'].shape[1]
-    selected_k = 500 - d_covs if args.include_covariates else 500
-    if selected_k <= 0:
-        raise ValueError(f"Number of covariates ({d_covs}) is >= 500. Adjust your feature selection parameters.")
-    print(f"Will select {selected_k} features from X to combine with {d_covs} covariates")
+    # Calculate how many features to select from X:
+    if args.covariates_only:
+        # Covariates-only mode: set selected_k to 0
+        selected_k = 0
+        model_type_info = ["covariates_only"]
+        print(f"Covariates-only mode: selected_k = {selected_k}, will use {data['Covs'].shape[1]} covariates")
+    elif args.selected_k is not None:
+        # User explicitly provided selected_k
+        selected_k = args.selected_k
+        model_type_info = [f"custom_k_{selected_k}"]
+        print(f"Using user-specified selected_k = {selected_k}")
+    else:
+        # Original behavior: Final feature dimension = (selected features from X) + (number of covariates)
+        d_covs = data['Covs'].shape[1]
+        selected_k = 500 - d_covs if args.include_covariates else 500
+        model_type_info = ["standard"]
+        
+    if selected_k < 0:
+        print(f"Warning: calculated selected_k is negative ({selected_k}). Setting to 0.")
+        selected_k = 0
+    
+    print(f"Will select {selected_k} features from predictors" + 
+          (f" and use {data['Covs'].shape[1]} covariates" if args.include_covariates else ""))
     
     # Get target lists
     target_lists = get_target_lists(data['Y_annot_df'])
