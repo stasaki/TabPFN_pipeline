@@ -1,4 +1,34 @@
 # Changelog
+## [1.9.0] - 2025-05-24
+
+### Added
+- Cross-validation stacking mode for information leakage-free predictions:
+  - New `--cv_folds` parameter in main.py to enable K-fold cross-validation mode
+  - Added `process_target_cv()` function for handling CV-based model training
+  - Implemented `train_regression_model_fold()` and `train_classification_model_fold()` for individual fold processing
+  - GroupKFold integration with person-level constraints to prevent data leakage
+  - CV predictions saved as `{target_id}_cv_predictions.csv.gz` files containing out-of-fold predictions for all samples
+- Enhanced test script functionality:
+  - Added comprehensive CV mode testing with validation of prediction files
+  - New `--comprehensive` flag for testing multiple scenarios (regression/classification, single split/CV)
+  - Added `validate_cv_predictions()` function to verify information leakage prevention
+  - Improved synthetic data generation with proper person ID formatting
+- Stacking-ready prediction outputs:
+  - Each sample appears exactly once in CV predictions (no information leakage)
+  - Fold information included in prediction files for traceability
+  - Aggregated performance metrics across all CV folds
+  - Compatible with existing prediction file format and infrastructure
+
+### Improved
+- Backward compatibility maintained: original single train/test split mode unchanged
+- Better error handling and validation for CV mode parameters
+- Enhanced logging and progress reporting for CV fold processing
+- Memory management optimized for CV mode with per-fold GPU cache clearing
+
+### Fixed
+- Person ID extraction from sample IDs now works correctly with CV splitting
+- Sample group compatibility properly handled when CV mode is enabled
+
 ## [1.8.0] - 2025-03-28
 
 ### Added

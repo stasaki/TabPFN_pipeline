@@ -37,6 +37,8 @@ def main():
                        help='Save model trained on training data only')
     parser.add_argument('--compute_shap', action='store_true', default=False,
                        help='Compute SHAP values for model interpretability')
+    parser.add_argument('--cv_folds', type=int, default=None,
+                       help='Number of CV folds for stacking predictions (default: single train/test split)')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args()
     
@@ -51,6 +53,16 @@ def main():
     print(f"Save model trained on full data: {args.save_full_model}")
     print(f"Save model trained on training data: {args.save_train_model}")
     print(f"Compute SHAP values: {args.compute_shap}")
+    
+    # Print CV mode information
+    if args.cv_folds:
+        print(f"STACKING MODE: Using {args.cv_folds}-fold cross-validation for information leakage-free predictions")
+        # In CV mode, we want to save models from each fold
+        if not args.save_train_model:
+            print("Note: CV mode typically saves fold models. Consider using --save_train_model")
+    else:
+        print("STANDARD MODE: Using single train/test split")
+        
     print(f"Data directory: {args.data_dir}")
     print(f"Output directory: {args.output_dir}")
     
@@ -92,6 +104,14 @@ def main():
         # If specific test sample groups were specified, show them
         if 'test_sample_groups' in data and data['test_sample_groups']:
             print(f"Using sample groups for testing: {', '.join(data['test_sample_groups'])}")
+    
+    # Validate CV mode compatibility
+    if args.cv_folds:
+        if args.test_sample_group:
+            print("Warning: CV mode and test_sample_group are incompatible. CV mode will use person-level GroupKFold.")
+            print("Ignoring test_sample_group parameter.")
+            # Clear the test sample groups for CV mode
+            data['test_sample_groups'] = None
     
     # Calculate how many features to select from X:
     if args.covariates_only:
@@ -194,7 +214,8 @@ def main():
             not args.scale_features,  # skip_scaling is True when scale_features is False
             args.save_full_model,     # Pass option for saving the full model
             args.save_train_model,    # Pass option for saving the training model
-            args.compute_shap         # Pass option for computing SHAP values
+            args.compute_shap,        # Pass option for computing SHAP values
+            args.cv_folds             # Pass CV folds for stacking mode
         )
         
         # If result is available, add it to the appropriate list and record predictor_group info
@@ -202,8 +223,12 @@ def main():
             # Add predictor group information
             result_dict["Predictor Groups"] = predictor_group_info
             
-            # Add sample group information
-            result_dict["Test Sample Groups"] = sample_group_info
+            # Add sample group information (modified for CV mode)
+            if args.cv_folds:
+                result_dict["CV Mode"] = f"{args.cv_folds}-fold"
+                result_dict["Test Sample Groups"] = ["cv_folds"]
+            else:
+                result_dict["Test Sample Groups"] = sample_group_info
             
             # Store result in appropriate list by type
             if result_dict["Type"] == "Regression":
@@ -247,6 +272,7 @@ def main():
                 "Scale Features": args.scale_features,
                 "Compute SHAP": args.compute_shap,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "CV Mode": r.get("CV Mode", "single_split"),
                 "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
                 "Save Train Model": args.save_train_model,
@@ -278,6 +304,7 @@ def main():
                 "Scale Features": args.scale_features,
                 "Compute SHAP": args.compute_shap,
                 "Predictor Groups": r.get("Predictor Groups", predictor_group_info),
+                "CV Mode": r.get("CV Mode", "single_split"),
                 "Test Sample Groups": r.get("Test Sample Groups", sample_group_info),
                 "Save Full Model": args.save_full_model,
                 "Save Train Model": args.save_train_model,
@@ -307,6 +334,10 @@ def main():
     total_elapsed = time.time() - start_time
     print(f"\nAll targets processed in {total_elapsed:.2f} seconds.")
     print(f"Processed {len(all_results)} models")
+    
+    if args.cv_folds:
+        print(f"\nSTACKING MODE COMPLETE: Information leakage-free predictions saved for all targets.")
+        print(f"CV predictions can be found in the predictions/ directory with '_cv_predictions.csv.gz' suffix.")
 
 if __name__ == "__main__":
     main()

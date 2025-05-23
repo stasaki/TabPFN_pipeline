@@ -19,6 +19,7 @@ This framework provides a comprehensive pipeline for training machine learning m
 
 - **Ensemble Feature Selection**: Combines multiple methods (Mutual Information, XGBoost, CatBoost, Random Forest) to select the most informative features
 - **Multi-task Learning**: Supports both regression and classification tasks
+- **Cross-Validation Stacking Mode**: Generates information leakage-free predictions for ensemble stacking using K-fold cross-validation
 - **GPU Acceleration**: Optional GPU support for XGBoost and CatBoost
 - **Covariate Integration**: Optional inclusion of covariates in models
 - **Person-level Validation**: Ensures train/test splits respect person identity (no data leakage)
@@ -136,6 +137,32 @@ With custom directories:
 python main.py --data_dir ../data --output_dir ./output --method CatBoost
 ```
 
+### Cross-Validation Stacking Mode
+
+For generating information leakage-free predictions suitable for ensemble stacking, use the `--cv_folds` parameter:
+
+Basic CV stacking:
+```bash
+python main.py --cv_folds 5
+```
+
+CV stacking with covariates:
+```bash
+python main.py --cv_folds 10 --include_covariates
+```
+
+Process all targets with CV stacking:
+```bash
+python main.py --cv_folds 5 --target_group all
+```
+
+CV stacking with specific predictor groups:
+```bash
+python main.py --cv_folds 5 --predictor_group proteomics metabolomics
+```
+
+**Note:** In CV stacking mode, the `--test_sample_group` parameter is ignored as the framework uses person-level GroupKFold cross-validation to ensure proper data splitting.
+
 ### Making Predictions
 
 Basic prediction:
@@ -190,10 +217,15 @@ python shap_analysis.py --model_path ./models/target123_model.pkl --data_dir ../
 - `--targets`: Specific targets to process
 - `--target_group`: Target group to process (choices: 'longitudinal', 'pathology', 'omics', 'demographic', 'genetic', 'slope', 'all')
 - `--predictor_group`: Predictor groups to use for model building (can specify multiple, use 'all' for all groups)
+- `--test_sample_group`: Sample groups to use for testing (ignored in CV mode)
+- `--cv_folds`: Number of cross-validation folds for stacking mode (default: None for single train/test split)
 - `--data_dir`: Directory containing data files (default: '../data')
 - `--output_dir`: Directory for output files (default: '.')
 - `--verbose`: Verbosity level (default: 1)
 - `--scale_features`: Apply StandardScaler to input features (default: False - no scaling)
+- `--save_full_model`: Save model trained on full data
+- `--save_train_model`: Save model trained on training data only
+- `--compute_shap`: Compute SHAP values for model interpretability
 
 #### Prediction (prediction.py)
 - `--data_dir`: Directory containing data files (default: '../data')
@@ -223,6 +255,9 @@ The framework generates the following outputs:
 - `results/`: Directory containing individual target results (JSON)
 - `features/`: Directory containing feature importance information (CSV)
 - `predictions/`: Directory containing prediction outputs (CSV)
+  - `{target_id}_training_predictions.csv.gz`: Training and test set predictions (single split mode)
+  - `{target_id}_cv_predictions.csv.gz`: Cross-validation predictions for stacking (CV mode)
+  - `{target_id}_full_predictions.csv.gz`: Full dataset predictions
 - `shap_values/`: Directory containing SHAP values for model interpretation
 - `regression_results.csv`: Summary of regression model performances
 - `classification_results.csv`: Summary of classification model performances
@@ -254,6 +289,61 @@ Each predictions file contains:
 - `true_value`: The actual target value
 - `prediction`: The model's prediction
 - For classification: additional `prob_class_X` columns with class probabilities
+
+## Cross-Validation Predictions for Stacking
+
+When using the `--cv_folds` parameter, the framework generates information leakage-free predictions suitable for ensemble stacking:
+
+```
+predictions/
+  ├── target1_id_cv_predictions.csv.gz    # CV predictions for stacking
+  ├── target2_id_cv_predictions.csv.gz
+  └── ...
+```
+
+### CV Predictions Format
+
+CV prediction files contain out-of-fold predictions for every sample:
+
+- `sample_id`: Sample identifier
+- `fold`: Which CV fold generated this prediction (1 to K)
+- `set`: Always 'test' (indicating out-of-fold prediction)
+- `true_value`: The actual target value
+- `prediction`: The model's prediction from a model that never saw this sample
+- For classification: additional `prob_class_X` columns with class probabilities
+
+### Information Leakage Prevention
+
+- Each sample appears exactly once in the CV predictions file
+- Predictions are made by models trained on data that excluded that specific sample
+- Person-level GroupKFold ensures the same person never appears in both training and test sets within a fold
+- Feature selection is performed independently within each fold
+
+### Using CV Predictions for Stacking
+
+The CV predictions are designed for use in ensemble stacking workflows:
+
+1. **Generate CV predictions** for multiple targets or feature sets:
+   ```bash
+   python main.py --cv_folds 5 --target_group all --predictor_group proteomics
+   python main.py --cv_folds 5 --target_group all --predictor_group metabolomics
+   ```
+
+2. **Load CV predictions** as features for a second-level model:
+   ```python
+   import pandas as pd
+   
+   # Load CV predictions as features
+   cv_preds_1 = pd.read_csv('predictions/target1_cv_predictions.csv.gz')
+   cv_preds_2 = pd.read_csv('predictions/target2_cv_predictions.csv.gz')
+   
+   # Combine predictions by sample_id for stacking
+   stacking_features = cv_preds_1[['sample_id', 'prediction']].merge(
+       cv_preds_2[['sample_id', 'prediction']], on='sample_id', suffixes=['_model1', '_model2']
+   )
+   ```
+
+3. **Train meta-learner** using the CV predictions as features for your final ensemble model.
 
 ## SHAP Value Analysis
 
@@ -354,6 +444,8 @@ The framework uses TabPFN (Tabular Prior-Data Fitted Networks) models which leve
 
 - **Regression**: R², MSE, MAE, Pearson correlation
 - **Classification**: Accuracy, Precision, Recall, F1 score, Confusion matrix
+
+**Note**: In CV stacking mode, metrics represent averages across all cross-validation folds, providing a more robust estimate of model performance compared to single train/test splits.
 
 ## GPU Support
 
