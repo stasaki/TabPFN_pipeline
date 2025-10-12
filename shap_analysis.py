@@ -348,6 +348,7 @@ def compute_shap_for_saved_model(model_path, data_dir, output_dir=None, n_sample
         feature_names=feature_names,
         output_dir=output_dir,
         target_id=target_id,
+        sample_ids=sample_ids,  # Pass the sample IDs
         n_samples=X_final.shape[0],  # Using all prepared samples
         is_classifier=(target_type == 'discrete')
     )

@@ -19,6 +19,7 @@ from tabpfn_extensions import interpretability
 
 from feature_selection import create_feature_selection_pipeline
 from data_loader import check_existing_results, load_existing_result, get_samples_by_group
+from sklearn.exceptions import UndefinedMetricWarning
 
 # Maximum number of samples TabPFN can handle
 TABPFN_MAX_SAMPLES = 10000
@@ -28,7 +29,35 @@ MODEL_REG_PATH = "../../Resources/models/tabpfn-v2-regressor.ckpt"
 MODEL_CLS_PATH = "auto"
 MODEL_REG_PATH = "auto"
 
-def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir, target_id, n_samples=50, is_classifier=True):
+def check_existing_cv_results(target_id, output_dir):
+    """
+    Check if CV results already exist for the given target_id
+    
+    Parameters:
+    -----------
+    target_id : str
+        Target ID
+    output_dir : str
+        Output directory
+        
+    Returns:
+    --------
+    bool
+        True if CV results exist, False otherwise
+    """
+    result_file = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
+    stacking_pred_file = os.path.join(output_dir, 'predictions', f"{target_id}_stacking_predictions.csv.gz")
+    
+    # Check if both results file and stacking predictions file exist
+    files_exist = os.path.exists(result_file) and os.path.exists(stacking_pred_file)
+    
+    if files_exist:
+        print(f"CV results already exist for target ID {target_id}. Skipping.")
+    
+    return files_exist
+
+def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir, target_id, 
+                                 sample_ids=None, n_samples=50, is_classifier=True):
     """
     Compute SHAP values for a trained model and save to file.
     Handles both classification (multi-class) and regression tasks.
@@ -45,6 +74,8 @@ def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir
         Directory to save SHAP values.
     target_id : str
         Target ID for file naming.
+    sample_ids : pandas.Series or numpy.ndarray, optional
+        Sample IDs corresponding to X_test_sample rows. If None, will use numeric indices.
     n_samples : int, default=50
         Number of samples to use for SHAP computation.
     is_classifier : bool, default=True
@@ -60,8 +91,17 @@ def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir
         # Randomly select n_samples from X_test_sample
         idx = np.random.choice(X_test_sample.shape[0], n_samples, replace=False)
         X_shap = X_test_sample[idx]
+        # Also subset sample_ids if provided
+        if sample_ids is not None:
+            if isinstance(sample_ids, pd.Series):
+                sample_ids_shap = sample_ids.iloc[idx].reset_index(drop=True)
+            else:
+                sample_ids_shap = sample_ids[idx]
+        else:
+            sample_ids_shap = None
     else:
         X_shap = X_test_sample
+        sample_ids_shap = sample_ids
 
     print(f"Computing SHAP values for {X_shap.shape[0]} samples...")
 
@@ -116,15 +156,30 @@ def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir
             raise ValueError(f"Unexpected SHAP values array shape: {shape}. Expected 2 or 3 dimensions.")
 
         # --- Create tidy DataFrame ---
+        # Prepare sample IDs for the tidy format
+        if sample_ids_shap is not None:
+            # Convert to numpy array if it's a pandas Series
+            if isinstance(sample_ids_shap, pd.Series):
+                sample_ids_array = sample_ids_shap.values
+            else:
+                sample_ids_array = np.array(sample_ids_shap)
+            
+            # Repeat sample IDs for each predictor and output combination
+            sample_ids_repeated = np.repeat(sample_ids_array, num_predictors * num_outputs)
+        else:
+            # Use numeric indices if no sample IDs provided
+            sample_ids_repeated = np.repeat(np.arange(runs), num_predictors * num_outputs)
+        
         # Ensure variable names match DataFrame columns
         run_ids = np.repeat(np.arange(runs), num_predictors * num_outputs)
         predictor_col = np.tile(np.repeat(predictor_names, num_outputs), runs)
         output_col = np.tile(np.array(output_labels), runs * num_predictors)
         shap_values_flat = shap_array.reshape(-1) # Flatten the array for the column
 
-        # Build the tidy DataFrame
+        # Build the tidy DataFrame with sample IDs
         df_tidy = pd.DataFrame({
-            "run": run_ids,          # Corresponds to the sample index in X_shap
+            "sample_id": sample_ids_repeated,  # Actual sample IDs or numeric indices
+            "run": run_ids,          # Corresponds to the sample index in X_shap (for reference)
             "predictor": predictor_col, # Feature name
             "output": output_col,    # Class label or target name
             "shap_value": shap_values_flat # The SHAP value itself
@@ -139,6 +194,7 @@ def compute_and_save_shap_values(model, X_test_sample, feature_names, output_dir
         df_tidy.to_csv(shap_file, index=False, compression="gzip")
 
         print(f"Saved SHAP values to {shap_file} (gzip compressed)")
+        print(f"SHAP output includes {len(df_tidy)} rows with sample IDs: {sample_ids_shap is not None}")
 
         return shap_file
 
@@ -183,7 +239,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
     compute_shap : bool, default=False
         Whether to compute SHAP values for model interpretability
     cv_folds : int, default=None
-        Number of CV folds for stacking mode. If None, uses single train/test split
+        Number of CV folds for stacking mode: generates CV predictions for valid targets + full model predictions for missing targets
     
     Returns:
     --------
@@ -209,39 +265,75 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         target_nlevels = None if pd.isna(target_info['nlevels'].values[0]) else int(target_info['nlevels'].values[0])
         target_id = target_info['target_id'].values[0]  # Get target_id for file naming
         
-        cv_mode_str = f" with {cv_folds}-fold CV" if cv_folds else ""
+        cv_mode_str = f" with {cv_folds}-fold CV stacking" if cv_folds else ""
         print(f"Target: {target_name}, ID: {target_id}, Type: {target_type}" + 
               (f", levels: {target_nlevels}" if target_nlevels else "") +
               (f", using pre-scaled data" if skip_scaling else ", scaling data") +
               (f", with SHAP values" if compute_shap else ", without SHAP values") +
               cv_mode_str)
         
-        # Check if results already exist for this target (skip in CV mode)
-        if not cv_folds and check_existing_results(target_id, output_dir):
-            # Load existing results and return
-            existing_result = load_existing_result(target_id, output_dir)
-            if existing_result:
-                print(f"Added existing result for {target_id} to results summary.")
-                return existing_result
-            return None
+        # Check if results already exist for this target
+        if cv_folds:
+            # For CV mode, check for CV-specific results
+            if check_existing_cv_results(target_id, output_dir):
+                existing_result = load_existing_result(target_id, output_dir)
+                if existing_result:
+                    print(f"Added existing CV result for {target_id} to results summary.")
+                    return existing_result
+                return None
+        else:
+            # For single split mode, use the original check
+            if check_existing_results(target_id, output_dir):
+                existing_result = load_existing_result(target_id, output_dir)
+                if existing_result:
+                    print(f"Added existing result for {target_id} to results summary.")
+                    return existing_result
+                return None
 
-        # Remove rows with NA in the current target column
-        valid_idx = data['Y_df'][target_name].notna()
-        y = data['Y_df'][target_name][valid_idx].values
-        X_valid = data['X'][valid_idx, :]
-        covs_valid = data['Covs'][valid_idx, :] if include_covariates else np.zeros((sum(valid_idx), 0))
-        sample_id_valid = data['sample_id'][valid_idx].reset_index(drop=True)
+        if cv_folds:
+            # CV STACKING MODE: Keep all samples, separate valid/missing for different processing
+            y_all = data['Y_df'][target_name].values  # Contains NaN for missing targets
+            X_all = data['X']
+            covs_all = data['Covs'] if include_covariates else np.zeros((len(data['sample_id']), 0))
+            sample_id_all = data['sample_id'].reset_index(drop=True)
+            
+            # Identify which samples have valid vs missing targets
+            valid_mask = ~pd.isna(y_all)
+            missing_mask = pd.isna(y_all)
+            
+            n_valid = np.sum(valid_mask)
+            n_missing = np.sum(missing_mask)
+            
+            print(f"CV stacking mode: {n_valid} samples with valid targets, {n_missing} samples with missing targets")
+            
+            if n_valid == 0:
+                print(f"Warning: No valid target values found for {target_name}. Skipping.")
+                return None
+            
+            # Extract valid samples for CV training
+            y_valid = y_all[valid_mask]
+            X_valid = X_all[valid_mask, :]
+            covs_valid = covs_all[valid_mask, :]
+            sample_id_valid = sample_id_all[valid_mask].reset_index(drop=True)
+            
+        else:
+            # STANDARD MODE: Only keep samples with valid targets
+            valid_idx = data['Y_df'][target_name].notna()
+            y_valid = data['Y_df'][target_name][valid_idx].values
+            X_valid = data['X'][valid_idx, :]
+            covs_valid = data['Covs'][valid_idx, :] if include_covariates else np.zeros((sum(valid_idx), 0))
+            sample_id_valid = data['sample_id'][valid_idx].reset_index(drop=True)
         
         # Extract person_id from the sample_id (assuming format is "person_id_measurement")
         sample_id_valid = sample_id_valid.astype(str)  # Convert to string
         person_ids = sample_id_valid.str.split('_', expand=True)[0]  # Get the first part before underscore
         
-        # Number of samples for this target
-        num_samples = len(y)
-        print(f"Number of valid samples: {num_samples}")
+        # Number of samples for this target (valid samples for processing)
+        num_samples = len(y_valid)
+        print(f"Number of valid samples for training: {num_samples}")
         
         if num_samples < 50:
-            print(f"Warning: Only {num_samples} samples for target {target_name}. Skipping due to insufficient data.")
+            print(f"Warning: Only {num_samples} valid samples for target {target_name}. Skipping due to insufficient data.")
             return None
 
         # Determine categorical features based on predictor_annot_df
@@ -268,7 +360,10 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         if cv_folds:
             # CV mode for stacking predictions
             return process_target_cv(
-                X_valid, y, covs_valid, sample_id_valid, person_ids,
+                # Valid samples for CV training
+                X_valid, y_valid, covs_valid, sample_id_valid, person_ids,
+                # Full dataset for missing target predictions
+                X_all, y_all, covs_all, sample_id_all,
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, target_type, target_nlevels, include_covariates,
@@ -278,7 +373,7 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         else:
             # Single split mode (original behavior)
             return process_target_single_split(
-                X_valid, y, covs_valid, sample_id_valid, person_ids,
+                X_valid, y_valid, covs_valid, sample_id_valid, person_ids,
                 selected_k, data['predictor_names'], data['covariate_names'],
                 cov_categorical_indices, categorical_indices,
                 target_name, target_id, target_type, target_nlevels, include_covariates,
@@ -293,20 +388,32 @@ def process_target(data, target_name, include_covariates, selected_k, method="Ca
         return None
 
 
-def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
+def process_target_cv(X_valid, y_valid, covs_valid, sample_id_valid, person_ids,
+                     X_all, y_all, covs_all, sample_id_all,
                      selected_k, predictor_names, covariate_names,
                      cov_categorical_indices, categorical_indices,
                      target_name, target_id, target_type, target_nlevels, include_covariates,
                      method, verbose, gpu, output_dir, skip_scaling,
                      cv_folds, compute_shap):
     """
-    Process target using cross-validation for stacking predictions
+    Process target using cross-validation for stacking predictions:
+    1. Generate CV predictions for samples with valid targets (information leakage-free)
+    2. Train full model on all valid targets and predict on samples with missing targets
+    3. Concatenate both sets of predictions into single stacking file
+    
+    Parameters:
+    -----------
+    X_valid, y_valid, covs_valid, sample_id_valid, person_ids : arrays
+        Data for samples with valid targets (used for CV training)
+    X_all, y_all, covs_all, sample_id_all : arrays
+        Full dataset including samples with missing targets
+    ... other parameters as before
     """
     from sklearn.model_selection import GroupKFold
     
     target_start = time.time()
     
-    print(f"Using {cv_folds}-fold cross-validation for information leakage-free predictions")
+    print(f"Using {cv_folds}-fold CV stacking: CV for valid targets + full model for missing targets")
     
     # Create directory for predictions
     predictions_dir = os.path.join(output_dir, 'predictions')
@@ -315,21 +422,24 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
     # Initialize GroupKFold with person-level grouping
     gkf = GroupKFold(n_splits=cv_folds)
     
-    # Collect predictions from all folds
+    # Collect CV predictions for valid targets
     all_cv_predictions = []
     cv_metrics = []
     
     # Initialize SHAP values collection
     all_shap_values = []
     
+    # Store feature importance information from folds
+    all_feature_importance_files = []
+    
     fold_num = 0
-    for train_idx, test_idx in gkf.split(X_valid, y, groups=person_ids):
+    for train_idx, test_idx in gkf.split(X_valid, y_valid, groups=person_ids):
         fold_num += 1
-        print(f"\nProcessing fold {fold_num}/{cv_folds}")
+        print(f"\nProcessing CV fold {fold_num}/{cv_folds}")
         
         # Split the data using these indices
         X_train, X_test = X_valid[train_idx], X_valid[test_idx]
-        y_train, y_test = y[train_idx], y[test_idx]
+        y_train, y_test = y_valid[train_idx], y_valid[test_idx]
         covs_train, covs_test = covs_valid[train_idx], covs_valid[test_idx] if include_covariates else (np.zeros((len(train_idx), 0)), np.zeros((len(test_idx), 0)))
         sample_id_train, sample_id_test = sample_id_valid.iloc[train_idx], sample_id_valid.iloc[test_idx]
         person_ids_train, person_ids_test = person_ids.iloc[train_idx], person_ids.iloc[test_idx]
@@ -423,6 +533,10 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
             # Collect SHAP values if computed
             if 'shap_values' in fold_result:
                 all_shap_values.extend(fold_result['shap_values'])
+                
+            # Collect feature importance file if available
+            if 'feature_importance_file' in fold_result:
+                all_feature_importance_files.append(fold_result['feature_importance_file'])
         
         # Clear GPU memory after each fold
         if torch.cuda.is_available():
@@ -430,12 +544,31 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
             if verbose >= 1:
                 print(f"Cleared GPU cache after fold {fold_num}")
     
-    # Save CV predictions to file
-    if all_cv_predictions:
-        cv_pred_df = pd.DataFrame(all_cv_predictions)
-        cv_predictions_file = os.path.join(predictions_dir, f"{target_id}_cv_predictions.csv.gz")
-        cv_pred_df.to_csv(cv_predictions_file, index=False, compression='gzip')
-        print(f"Saved CV predictions to {cv_predictions_file} (gzip compressed)")
+    print(f"\nCV phase complete. Collected {len(all_cv_predictions)} CV predictions from {cv_folds} folds.")
+    
+    # Now handle missing targets: train full model and predict on missing targets
+    missing_target_predictions = generate_missing_target_predictions(
+        target_name, target_id, target_type, target_nlevels,
+        X_all, y_all, covs_all, sample_id_all,
+        selected_k, predictor_names, covariate_names,
+        cov_categorical_indices, categorical_indices,
+        include_covariates, method, verbose, gpu, output_dir, skip_scaling
+    )
+    
+    # Combine CV predictions and missing target predictions
+    all_stacking_predictions = all_cv_predictions.copy()
+    if missing_target_predictions:
+        all_stacking_predictions.extend(missing_target_predictions)
+        print(f"Added {len(missing_target_predictions)} predictions for samples with missing targets")
+    
+    # Save combined stacking predictions to file
+    stacking_predictions_file = None
+    if all_stacking_predictions:
+        stacking_pred_df = pd.DataFrame(all_stacking_predictions)
+        stacking_predictions_file = os.path.join(predictions_dir, f"{target_id}_stacking_predictions.csv.gz")
+        stacking_pred_df.to_csv(stacking_predictions_file, index=False, compression='gzip')
+        print(f"Saved complete stacking predictions to {stacking_predictions_file} (gzip compressed)")
+        print(f"Total samples: {len(all_stacking_predictions)} ({len(all_cv_predictions)} CV + {len(missing_target_predictions) if missing_target_predictions else 0} missing targets)")
     
     # Save SHAP values if computed
     shap_file = None
@@ -447,7 +580,8 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
         shap_df.to_csv(shap_file, index=False, compression='gzip')
         print(f"Saved CV SHAP values to {shap_file} (gzip compressed)")
     
-    # Calculate overall CV metrics
+    # Calculate overall CV metrics and create result dictionary
+    feature_importance_file = None
     if cv_metrics:
         if target_type == 'continuous':
             avg_r2 = np.mean([m['r2'] for m in cv_metrics])
@@ -455,23 +589,40 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
             avg_mae = np.mean([m['mae'] for m in cv_metrics])
             avg_pearson = np.mean([m['pearson'] for m in cv_metrics])
             
+            # Collect individual fold metrics
+            fold_metrics = {}
+            for i, m in enumerate(cv_metrics):
+                fold_metrics[f'fold_{i+1}'] = {
+                    'r2': m['r2'],
+                    'mse': m['mse'],
+                    'mae': m['mae'],
+                    'pearson': m['pearson']
+                }
+            
             result_dict = {
                 "Target": target_name,
                 "Target ID": target_id,
                 "Type": "Regression",
                 "Framework_Version": __version__,
-                "Number of samples": len(y),
+                "Number of samples": len(y_valid),
                 "Include Covariates": include_covariates,
                 "Scale Features": not skip_scaling,
                 "Compute SHAP": compute_shap,
                 "CV Folds": cv_folds,
+                # Average metrics
                 "R2": avg_r2,
                 "MSE": avg_mse,
                 "MAE": avg_mae,
                 "Pearson": avg_pearson,
+                # Individual fold metrics
+                "Fold Metrics": fold_metrics,
+                # Standard deviation across folds
+                "R2_std": np.std([m['r2'] for m in cv_metrics]),
+                "MSE_std": np.std([m['mse'] for m in cv_metrics]),
+                "MAE_std": np.std([m['mae'] for m in cv_metrics]),
+                "Pearson_std": np.std([m['pearson'] for m in cv_metrics]),
                 "Time (s)": time.time() - target_start,
-                "Model file": f"CV_{cv_folds}_folds",
-                "Predictions file": cv_predictions_file if all_cv_predictions else ""
+                "Model file": f"CV_{cv_folds}_folds_stacking"
             }
         else:
             avg_accuracy = np.mean([m['accuracy'] for m in cv_metrics])
@@ -479,33 +630,351 @@ def process_target_cv(X_valid, y, covs_valid, sample_id_valid, person_ids,
             avg_recall = np.mean([m['recall'] for m in cv_metrics if not np.isnan(m['recall'])])
             avg_f1 = np.mean([m['f1'] for m in cv_metrics if not np.isnan(m['f1'])])
             
+            # Collect individual fold metrics
+            fold_metrics = {}
+            for i, m in enumerate(cv_metrics):
+                fold_metrics[f'fold_{i+1}'] = {
+                    'accuracy': m['accuracy'],
+                    'precision': m['precision'],
+                    'recall': m['recall'],
+                    'f1': m['f1']
+                }
+            
             result_dict = {
                 "Target": target_name,
                 "Target ID": target_id,
                 "Type": "Classification",
                 "Framework_Version": __version__,
-                "Number of samples": len(y),
+                "Number of samples": len(y_valid),
                 "Include Covariates": include_covariates,
                 "Scale Features": not skip_scaling,
                 "Compute SHAP": compute_shap,
                 "CV Folds": cv_folds,
                 "Classes": target_nlevels,
+                # Average metrics
                 "Accuracy": avg_accuracy,
                 "Precision": avg_precision,
-                "Recall": avg_recall,
+                "Recall": avg_recall,  
                 "F1": avg_f1,
+                # Individual fold metrics
+                "Fold Metrics": fold_metrics,
+                # Standard deviation across folds
+                "Accuracy_std": np.std([m['accuracy'] for m in cv_metrics]),
+                "Precision_std": np.std([m['precision'] for m in cv_metrics if not np.isnan(m['precision'])]),
+                "Recall_std": np.std([m['recall'] for m in cv_metrics if not np.isnan(m['recall'])]),
+                "F1_std": np.std([m['f1'] for m in cv_metrics if not np.isnan(m['f1'])]),
                 "Time (s)": time.time() - target_start,
-                "Model file": f"CV_{cv_folds}_folds",
-                "Predictions file": cv_predictions_file if all_cv_predictions else ""
+                "Model file": f"CV_{cv_folds}_folds_stacking"
             }
         
-        # Add SHAP file to result dictionary if computed
+        # Add files to result dictionary (same as before)
+        if stacking_predictions_file:
+            result_dict["Predictions file"] = stacking_predictions_file
         if shap_file:
             result_dict["SHAP values file"] = shap_file
+        if all_feature_importance_files:
+            result_dict["Feature importance files"] = all_feature_importance_files
+            # Use the first fold's feature importance as the primary one
+            result_dict["Feature importance file"] = all_feature_importance_files[0]
+        
+        # Save the result dictionary to individual text file
+        result_filename = os.path.join(output_dir, 'results', f"{target_id}_results.txt")
+        os.makedirs(os.path.join(output_dir, 'results'), exist_ok=True)
+        
+        with open(result_filename, 'w') as f:
+            json.dump(result_dict, f, indent=4)
+        print(f"Saved CV result with individual fold metrics to {result_filename}")
         
         return result_dict
     
     return None
+
+
+def generate_missing_target_predictions(target_name, target_id, target_type, target_nlevels,
+                                       X_all, y_all, covs_all, sample_id_all,
+                                       selected_k, predictor_names, covariate_names,
+                                       cov_categorical_indices, categorical_indices,
+                                       include_covariates, method, verbose, gpu, output_dir, skip_scaling):
+    """
+    Generate predictions for samples with missing targets using a full model trained on all valid targets
+    
+    Parameters:
+    -----------
+    target_name : str
+        Name of the target
+    target_id : str
+        ID of the target  
+    target_type : str
+        Type of target ('continuous' or 'discrete')
+    target_nlevels : int or None
+        Number of levels for discrete targets
+    X_all, y_all, covs_all, sample_id_all : arrays
+        Full dataset including samples with missing targets
+    ... other training parameters
+    
+    Returns:
+    --------
+    list or None
+        List of prediction dictionaries for missing target samples, or None if no missing targets
+    """
+    try:
+        # Identify samples with missing vs valid targets
+        valid_mask = ~pd.isna(y_all)
+        missing_mask = pd.isna(y_all)
+        
+        n_valid = np.sum(valid_mask)
+        n_missing = np.sum(missing_mask)
+        
+        if n_missing == 0:
+            print("No samples with missing targets found")
+            return None
+            
+        if n_valid == 0:
+            print("Error: No valid target samples to train full model")
+            return None
+            
+        print(f"Generating predictions for {n_missing} samples with missing targets using full model trained on {n_valid} valid samples")
+        
+        # Extract data for training full model (all samples with valid targets)
+        X_train_full = X_all[valid_mask, :]
+        y_train_full = y_all[valid_mask]
+        covs_train_full = covs_all[valid_mask, :]
+        
+        # Extract data for prediction (samples with missing targets)
+        X_missing = X_all[missing_mask, :]
+        covs_missing = covs_all[missing_mask, :]
+        sample_id_missing = sample_id_all[missing_mask]
+        
+        # Apply TabPFN sampling limit if needed for training data
+        if len(X_train_full) > TABPFN_MAX_SAMPLES:
+            print(f"Full training set exceeds TabPFN limit ({len(X_train_full)} > {TABPFN_MAX_SAMPLES}). Sampling...")
+            
+            # For classification, use stratified sampling to preserve class distribution
+            stratify = y_train_full if target_type == 'discrete' and len(np.unique(y_train_full)) < 10 else None
+            
+            # Sample indices
+            indices = np.arange(len(X_train_full))
+            _, sampled_indices = train_test_split(
+                indices, 
+                test_size=TABPFN_MAX_SAMPLES,
+                random_state=42,
+                stratify=stratify
+            )
+            
+            # Apply sampling
+            X_train_full = X_train_full[sampled_indices]
+            y_train_full = y_train_full[sampled_indices]
+            covs_train_full = covs_train_full[sampled_indices] if include_covariates else np.zeros((TABPFN_MAX_SAMPLES, 0))
+            
+            print(f"Sampled {TABPFN_MAX_SAMPLES} out of {n_valid} training samples for full model")
+        
+        # Train full model using the same pipeline as CV folds
+        if target_type == 'continuous':
+            missing_predictions = train_full_regression_model_for_missing(
+                X_train_full, X_missing, y_train_full,
+                covs_train_full, covs_missing,
+                sample_id_missing,
+                selected_k, predictor_names, covariate_names,
+                cov_categorical_indices, categorical_indices,
+                target_name, target_id, include_covariates,
+                method, verbose, gpu, skip_scaling
+            )
+        else:
+            missing_predictions = train_full_classification_model_for_missing(
+                X_train_full, X_missing, y_train_full,
+                covs_train_full, covs_missing,
+                sample_id_missing,
+                selected_k, predictor_names, covariate_names,
+                cov_categorical_indices, categorical_indices,
+                target_name, target_id, target_nlevels, include_covariates,
+                method, verbose, gpu, skip_scaling
+            )
+        
+        return missing_predictions
+        
+    except Exception as e:
+        print(f"Error generating missing target predictions: {e}")
+        if verbose >= 2:
+            import traceback
+            traceback.print_exc()
+        return None
+
+
+def train_full_regression_model_for_missing(X_train, X_predict, y_train,
+                                           covs_train, covs_predict,
+                                           sample_id_predict,
+                                           selected_k, predictor_names, covariate_names,
+                                           cov_categorical_indices, categorical_indices,
+                                           target_name, target_id, include_covariates,
+                                           method, verbose, gpu, skip_scaling):
+    """
+    Train a full regression model and predict on missing target samples
+    """
+    # Scale y: create a separate scaler for the target variable
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(y_train.reshape(-1, 1)).ravel()
+
+    # Create a pipeline for X that scales and selects features
+    pipeline_fs = create_feature_selection_pipeline(
+        selected_k=selected_k, 
+        methods=[method],
+        verbose=verbose if verbose >= 2 else 0,  # Reduce verbosity for full model
+        gpu=gpu,
+        task='regression',
+        skip_scaling=skip_scaling,
+    )
+    
+    # Fit the pipeline on X_train
+    pipeline_fs.fit(X_train, y_train_scaled, feature_selection__feature_names=predictor_names)
+    
+    # Transform both training and prediction sets
+    X_train_selected = pipeline_fs.transform(X_train)
+    X_predict_selected = pipeline_fs.transform(X_predict)
+    
+    # Get the names of selected features
+    selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
+    selected_feature_names = predictor_names[selected_feature_indices]
+    
+    # Concatenate the selected features from X with the covariates
+    X_train_final = np.hstack([X_train_selected, covs_train]) if include_covariates else X_train_selected
+    X_predict_final = np.hstack([X_predict_selected, covs_predict]) if include_covariates else X_predict_selected
+    
+    # Update categorical indices for the final feature matrix
+    final_categorical_indices = categorical_indices.copy()
+    if include_covariates:
+        for cov_idx in cov_categorical_indices:
+            final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
+            
+    # Initialize and train the regressor on the final training features
+    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+    regressor = TabPFNRegressor(
+        device=device,
+        categorical_features_indices=final_categorical_indices,
+        model_path = MODEL_REG_PATH,
+        n_estimators=8
+    )
+    regressor.fit(X_train_final, y_train_scaled)
+    
+    # Predict on missing target samples (predictions are in scaled space)
+    predictions_scaled = regressor.predict(X_predict_final)
+    
+    # Inverse-transform predictions back to the original y scale
+    predictions = y_scaler.inverse_transform(predictions_scaled.reshape(-1, 1)).ravel()
+    
+    # Format predictions for missing target samples
+    missing_predictions = []
+    for i, (sid, pred_val) in enumerate(zip(sample_id_predict, predictions)):
+        missing_predictions.append({
+            'sample_id': sid,
+            'fold': 'full_model',  # Indicate this came from full model, not CV
+            'set': 'missing_target',
+            'true_value': np.nan,  # Missing target, so true value is NaN
+            'prediction': pred_val
+        })
+    
+    return missing_predictions
+
+
+def train_full_classification_model_for_missing(X_train, X_predict, y_train,
+                                               covs_train, covs_predict,
+                                               sample_id_predict,
+                                               selected_k, predictor_names, covariate_names,
+                                               cov_categorical_indices, categorical_indices,
+                                               target_name, target_id, target_nlevels, include_covariates,
+                                               method, verbose, gpu, skip_scaling):
+    """
+    Train a full classification model and predict on missing target samples
+    """
+    # For classification, we might need to convert y to integer labels
+    if not np.issubdtype(y_train.dtype, np.integer):
+        # Get unique classes and map them to integers
+        classes = np.unique(y_train)
+        class_map = {val: idx for idx, val in enumerate(classes)}
+        y_train_mapped = np.array([class_map[val] for val in y_train])
+        reverse_map = {idx: val for val, idx in class_map.items()}
+    else:
+        class_map = None
+        reverse_map = None
+        y_train_mapped = y_train
+
+    # Create a pipeline for X that scales and selects features
+    pipeline_fs = create_feature_selection_pipeline(
+        selected_k=selected_k, 
+        methods=[method],
+        verbose=verbose if verbose >= 2 else 0,  # Reduce verbosity for full model
+        gpu=gpu,
+        task='classification',
+        skip_scaling=skip_scaling
+    )
+    
+    # Fit the pipeline on X_train
+    pipeline_fs.fit(X_train, y_train_mapped, feature_selection__feature_names=predictor_names)
+
+    # Transform both training and prediction sets
+    X_train_selected = pipeline_fs.transform(X_train)
+    X_predict_selected = pipeline_fs.transform(X_predict)
+    
+    # Get the names of selected features
+    selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
+    selected_feature_names = predictor_names[selected_feature_indices]
+    
+    # Concatenate the selected features from X with the covariates
+    X_train_final = np.hstack([X_train_selected, covs_train]) if include_covariates else X_train_selected
+    X_predict_final = np.hstack([X_predict_selected, covs_predict]) if include_covariates else X_predict_selected
+    
+    # Update categorical indices for the final feature matrix
+    final_categorical_indices = categorical_indices.copy()
+    if include_covariates:
+        for cov_idx in cov_categorical_indices:
+            final_categorical_indices.append(X_train_selected.shape[1] + cov_idx)
+            
+    # Initialize and train the classifier on the final training features
+    device = "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+    classifier = TabPFNClassifier(
+        device=device,
+        categorical_features_indices=final_categorical_indices,
+        model_path = MODEL_CLS_PATH,
+        n_estimators=8
+    )
+    classifier.fit(X_train_final, y_train_mapped)
+    
+    # Predict on missing target samples
+    predictions = classifier.predict(X_predict_final)
+    
+    # Get probability outputs if available
+    try:
+        pred_proba = classifier.predict_proba(X_predict_final)
+        has_probas = True
+    except Exception as e:
+        pred_proba = None
+        has_probas = False
+    
+    # Map the predictions back to original classes if needed
+    if class_map:
+        predictions_original = np.array([reverse_map[idx] for idx in predictions])
+    else:
+        predictions_original = predictions
+    
+    # Format predictions for missing target samples
+    missing_predictions = []
+    for i, (sid, pred_val) in enumerate(zip(sample_id_predict, predictions_original)):
+        pred_dict = {
+            'sample_id': sid,
+            'fold': 'full_model',  # Indicate this came from full model, not CV
+            'set': 'missing_target',
+            'true_value': np.nan,  # Missing target, so true value is NaN
+            'prediction': pred_val
+        }
+        
+        # Add probability columns if available
+        if has_probas:
+            for j in range(pred_proba.shape[1]):
+                class_name = reverse_map[j] if reverse_map else j
+                pred_dict[f'prob_class_{class_name}'] = pred_proba[i, j]
+        
+        missing_predictions.append(pred_dict)
+    
+    return missing_predictions
 
 
 def process_target_single_split(X_valid, y, covs_valid, sample_id_valid, person_ids,
@@ -707,6 +1176,10 @@ def train_regression_model_fold(X_train, X_test, y_train, y_test,
     X_train_selected = pipeline_fs.transform(X_train)
     X_test_selected = pipeline_fs.transform(X_test)
     
+    # Save feature importance after fitting (for this fold)
+    fold_target_id = f"{target_id}_fold{fold_num}"
+    feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, fold_target_id)
+    
     # Get the indices of selected features
     selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
     
@@ -789,9 +1262,9 @@ def train_regression_model_fold(X_train, X_test, y_train, y_test,
             'mae': mae,
             'pearson': pearson_r
         },
-        'shap_values': fold_shap_values
+        'shap_values': fold_shap_values,
+        'feature_importance_file': feature_importance_file
     }
-
 
 def train_classification_model_fold(X_train, X_test, y_train, y_test,
                                    covs_train, covs_test,
@@ -802,8 +1275,22 @@ def train_classification_model_fold(X_train, X_test, y_train, y_test,
                                    method, verbose, gpu, output_dir, skip_scaling,
                                    fold_num, compute_shap):
     """
-    Train classification model for a single CV fold
+    Train classification model for a single CV fold with robust error handling
     """
+    
+    # Check class distribution in train and test sets
+    train_classes, train_counts = np.unique(y_train, return_counts=True)
+    test_classes, test_counts = np.unique(y_test, return_counts=True)
+    
+    if verbose >= 1:
+        print(f"  Train classes: {dict(zip(train_classes, train_counts))}")
+        print(f"  Test classes: {dict(zip(test_classes, test_counts))}")
+    
+    # Check for classes present in test but not in train (will cause issues)
+    missing_in_train = set(test_classes) - set(train_classes)
+    if missing_in_train:
+        print(f"  Warning: Classes {missing_in_train} in test set but not in train set for fold {fold_num}")
+    
     # For classification, we might need to convert y to integer labels
     if not np.issubdtype(y_train.dtype, np.integer):
         # Get unique classes and map them to integers
@@ -834,6 +1321,10 @@ def train_classification_model_fold(X_train, X_test, y_train, y_test,
     # Transform both training and test sets
     X_train_selected = pipeline_fs.transform(X_train)
     X_test_selected = pipeline_fs.transform(X_test)
+    
+    # Save feature importance after fitting (for this fold)
+    fold_target_id = f"{target_id}_fold{fold_num}"
+    feature_importance_file = pipeline_fs.named_steps['feature_selection'].save_feature_importance(output_dir, fold_target_id)
     
     # Get the indices of selected features
     selected_feature_indices = pipeline_fs.named_steps['feature_selection'].get_support(indices=True)
@@ -886,19 +1377,56 @@ def train_classification_model_fold(X_train, X_test, y_train, y_test,
     else:
         test_pred_original = test_predictions
     
-    # Calculate classification metrics using test set
+    # Calculate classification metrics using test set with robust error handling
     accuracy = accuracy_score(y_test_mapped, test_predictions)
     
-    # For multi-class, use 'weighted' average
-    average_method = 'binary' if target_nlevels == 2 else 'weighted'
+    # Determine the best averaging method based on class distribution
+    if target_nlevels == 2:
+        average_method = 'binary'
+    else:
+        # For multi-class, check if we have all classes represented
+        unique_true = set(y_test_mapped)
+        unique_pred = set(test_predictions)
+        
+        if len(unique_true) == target_nlevels and len(unique_pred) == target_nlevels:
+            average_method = 'weighted'
+        else:
+            # Fall back to macro averaging but handle warnings
+            average_method = 'macro'
     
+    # Calculate metrics with proper error handling
     try:
-        precision = precision_score(y_test_mapped, test_predictions, average=average_method)
-        recall = recall_score(y_test_mapped, test_predictions, average=average_method)
-        f1 = f1_score(y_test_mapped, test_predictions, average=average_method)
+        # Suppress specific warnings for this calculation
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=UndefinedMetricWarning)
+            
+            precision = precision_score(y_test_mapped, test_predictions, 
+                                      average=average_method, zero_division=0)
+            recall = recall_score(y_test_mapped, test_predictions, 
+                                average=average_method, zero_division=0)
+            f1 = f1_score(y_test_mapped, test_predictions, 
+                         average=average_method, zero_division=0)
+            
+        if verbose >= 2:
+            print(f"  Fold {fold_num} metrics - Accuracy: {accuracy:.3f}, "
+                  f"Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}")
+                  
     except Exception as e:
-        print(f"Warning: Could not calculate some metrics: {e}")
-        precision = recall = f1 = np.nan
+        print(f"  Warning: Could not calculate some metrics for fold {fold_num}: {e}")
+        precision = recall = f1 = 0.0
+    
+    # Additional diagnostic information
+    if verbose >= 2:
+        pred_classes, pred_counts = np.unique(test_predictions, return_counts=True)
+        print(f"  Predicted classes: {dict(zip(pred_classes, pred_counts))}")
+        
+        # Check for classes that were never predicted
+        all_classes = set(range(target_nlevels)) if class_map is None else set(class_map.values())
+        unpredicted_classes = all_classes - set(test_predictions)
+        if unpredicted_classes:
+            original_unpredicted = [reverse_map[c] if reverse_map else c for c in unpredicted_classes]
+            print(f"  Classes never predicted: {original_unpredicted}")
     
     # Prepare fold predictions
     fold_predictions = []
@@ -943,8 +1471,18 @@ def train_classification_model_fold(X_train, X_test, y_train, y_test,
             'recall': recall,
             'f1': f1
         },
-        'shap_values': fold_shap_values
+        'shap_values': fold_shap_values,
+        'feature_importance_file': feature_importance_file,
+        'diagnostic_info': {
+            'train_class_counts': dict(zip(train_classes, train_counts)),
+            'test_class_counts': dict(zip(test_classes, test_counts)),
+            'predicted_class_counts': dict(zip(pred_classes, pred_counts)) if 'pred_classes' in locals() else {},
+            'missing_classes_in_train': list(missing_in_train),
+            'averaging_method_used': average_method
+        }
     }
+
+
 
 
 # Keep the original single-split training functions unchanged

@@ -2,6 +2,23 @@
 
 This framework provides a comprehensive pipeline for training machine learning models on biological data, featuring ensemble feature selection and TabPFN models for prediction. It's designed to handle various types of biomarker data, with particular focus on omics data analysis and target prediction.
 
+
+## Method description
+# TabPFN Pipeline Method Description
+
+Both regression and classification models were implemented using TabPFN (Tabular Prior-Fitted Networks), a transformer-based approach that leverages pre-trained neural networks for tabular data prediction. The pipeline incorporated feature selection, data preprocessing, and model training with the following methodology:
+
+**Feature Selection and Preprocessing**: When the number of input features exceeded 500, CatBoost-based feature selection was applied to reduce dimensionality to ≤500 features before TabPFN modeling. Selected features were combined with covariates when specified, and both predictors and targets were standardized to ensure consistent scaling across variables.
+
+**Model Configuration**: For regression tasks, TabPFN regressors were configured with GPU acceleration and 8 ensemble estimators. For classification tasks, TabPFN classifiers were similarly configured with GPU acceleration and 8 ensemble estimators. Categorical feature indices were explicitly specified to handle mixed data types appropriately. Both models utilized pre-trained weights optimized for their respective tabular tasks.
+
+**Training and Prediction**: For regression, models were trained on scaled target variables and generated predictions that were subsequently inverse-transformed to the original scale using 10-fold cross-validation. For classification, models were trained directly on categorical targets and produced class probability predictions using 10-fold cross-validation.
+
+**Performance Evaluation**: Regression model performance was assessed using multiple metrics including mean squared error (MSE), mean absolute error (MAE), R-squared, and Pearson correlation coefficient, all calculated using original-scale predictions to ensure interpretability. Classification model performance was evaluated using accuracy, precision, recall, F1-score, and area under the ROC curve (AUC-ROC).
+
+**Model Interpretability**: SHAP (SHapley Additive exPlanations) values were computed for model interpretability using a subset of test samples (maximum 50 samples). SHAP analysis employed a permutation-based explainer algorithm to provide feature-level importance scores and explanations for individual predictions, enabling identification of the most influential features driving model predictions. The SHAP computation utilized the original test data with the same preprocessing pipeline applied during model training, ensuring consistency between model predictions and interpretability analysis.
+
+
 ## Project Structure
 
 ```
