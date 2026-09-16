@@ -1,5 +1,7 @@
 # Biological Data Model Training Framework
 
+**Built with PriorLabs-TabPFN.** This pipeline code is released under the MIT License; the TabPFN models and weights it uses are covered by the [Prior Labs License](LICENSE-TabPFN). See [License](#license).
+
 This framework provides a comprehensive pipeline for training machine learning models on biological data, featuring ensemble feature selection and TabPFN models for prediction. It's designed to handle various types of biomarker data, with particular focus on omics data analysis and target prediction.
 
 
@@ -33,6 +35,8 @@ Both regression and classification models were implemented using TabPFN (Tabular
 ├── test_script.py       # Generates simulated demo data and runs the pipeline end to end
 ├── requirements.txt     # Package dependencies (minimum versions)
 ├── requirements-lock.txt # Exact package versions used for testing
+├── LICENSE              # MIT license for the pipeline code
+├── LICENSE-TabPFN       # Prior Labs license covering TabPFN software and model weights
 └── README.md            # Project documentation
 ```
 
@@ -597,4 +601,19 @@ Notes:
 
 ## License
 
-[Specify license here]
+This repository uses two licenses:
+
+- **Pipeline code** (all `.py` files, notebooks, and documentation in this repository):
+  [MIT License](LICENSE). Copyright (c) 2025-2026 Shinya Tasaki.
+- **TabPFN software and pretrained model weights** (the `tabpfn` and `tabpfn_extensions`
+  packages, the model checkpoints downloaded on first run, and any models or model
+  outputs produced with them): [Prior Labs License](LICENSE-TabPFN), which is Apache 2.0
+  with an additional attribution provision. TabPFN is developed by
+  [Prior Labs](https://priorlabs.ai) and is not part of this repository.
+
+If you distribute models trained with this pipeline, or a product or service built on
+them, the Prior Labs License requires that you (A) include a copy of that license and
+(B) prominently display "Built with PriorLabs-TabPFN" in the related documentation or
+user interface. See Section 10 of [LICENSE-TabPFN](LICENSE-TabPFN) for the exact terms.
+
+Built with PriorLabs-TabPFN.
