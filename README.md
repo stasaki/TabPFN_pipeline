@@ -69,6 +69,33 @@ Both regression and classification models were implemented using TabPFN (Tabular
    ```bash
    pip install -r requirements.txt
    ```
+   To reproduce the tested environment exactly, use the pinned versions instead:
+   ```bash
+   pip install -r requirements-lock.txt
+   ```
+
+3. (Optional, for machines without an NVIDIA GPU) Install the CPU-only PyTorch build
+   before the other requirements. It is about 200 MB instead of 6 GB:
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/cpu
+   pip install -r requirements.txt
+   ```
+
+### Installation time and disk space
+
+Installation is dominated by downloading PyTorch and its CUDA libraries. Measured on a
+clean virtual environment with an empty pip cache:
+
+| Setup | Download (approx.) | Disk space | Typical time on a desktop with a 100 Mbit/s connection |
+|---|---|---|---|
+| GPU build (default `pip install torch`) | ~3 GB | ~8 GB | 5-10 minutes |
+| CPU-only PyTorch build | ~0.5 GB | ~2 GB | 2-3 minutes |
+
+On a fast data-center connection the GPU build installed in about 2.5 minutes.
+
+On the first run, TabPFN downloads its pretrained model weights (about 75-150 MB per
+checkpoint) from Hugging Face and caches them under `~/.cache/tabpfn`. This adds about
+a minute the first time and is not repeated.
 
 ## Quick Start (Demo with Simulated Data)
 
