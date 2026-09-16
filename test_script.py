@@ -375,7 +375,7 @@ def run_test(output_dir='test_output', data_dir='test_data',
             
             # Check for CV predictions file
             predictions_file = result.get('Predictions file', '')
-            if predictions_file and '_cv_predictions.csv.gz' in predictions_file:
+            if predictions_file and '_stacking_predictions.csv.gz' in predictions_file:
                 print(f"✓ CV predictions file found: {predictions_file}")
                 
                 # Validate CV predictions

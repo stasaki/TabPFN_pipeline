@@ -28,6 +28,9 @@ Both regression and classification models were implemented using TabPFN (Tabular
 ├── main.py              # Main execution script for training
 ├── prediction.py        # Module for making predictions with trained models
 ├── shap_analysis.py     # Module for computing SHAP values from saved models
+├── stacking.py          # Stacking of cross-validation predictions
+├── stacking_utils.py    # Helper functions for stacking
+├── test_script.py       # Generates simulated demo data and runs the pipeline end to end
 ├── requirements.txt     # Package dependencies
 └── README.md            # Project documentation
 ```
@@ -65,6 +68,56 @@ Both regression and classification models were implemented using TabPFN (Tabular
    ```bash
    pip install -r requirements.txt
    ```
+
+## Quick Start (Demo with Simulated Data)
+
+The repository does not ship a data file, but `test_script.py` generates a small
+simulated dataset in the required input format and runs the full pipeline on it.
+This is the fastest way to check that the software works on your machine.
+
+Run a small regression demo (about 10 seconds on a GPU, a few minutes on CPU):
+
+```bash
+python test_script.py --data_dir demo_data --output_dir demo_output \
+    --n_train_samples 300 --n_test_samples 100 --n_features 50
+```
+
+This will:
+
+1. Write simulated input files to `demo_data/` (`predictors.txt.gz`, `targets.txt.gz`,
+   `covs.txt.gz`, and the three annotation files). These files follow the format
+   described in [Data Structure](#data-structure) and can be used as a template for
+   your own data.
+2. Select features with CatBoost, train a TabPFN model, and predict on the held-out
+   test samples.
+3. Write models, predictions, feature importance, and metrics to `demo_output/`
+   (see [Output Files](#output-files)).
+4. Print `Test results: SUCCESS` together with the R2 and MSE on the test samples.
+
+Other demo variants:
+
+```bash
+# Classification target
+python test_script.py --data_dir demo_data --output_dir demo_output \
+    --n_train_samples 300 --n_test_samples 100 --n_features 50 --classification
+
+# Cross-validation stacking mode (3 folds)
+python test_script.py --data_dir demo_data --output_dir demo_output \
+    --n_train_samples 300 --n_test_samples 100 --n_features 50 \
+    --cv_folds 3 --no_single_split_comparison
+```
+
+Running `python test_script.py` with no arguments generates a larger dataset
+(12,000 training samples, 3,000 test samples, 1,000 features) to exercise the
+TabPFN sampling path for more than 10,000 samples. Add `--comprehensive` to run
+all scenarios in sequence.
+
+Note: if the import of TabPFN fails with a message about `SCIPY_ARRAY_API`, set
+that variable before running:
+
+```bash
+SCIPY_ARRAY_API=1 python test_script.py ...
+```
 
 ## Data Structure
 
