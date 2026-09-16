@@ -1,0 +1,11 @@
+# Exact package versions the pipeline was tested with (Ubuntu 22.04.3, Python 3.13.1, CUDA 12.8).
+# Install with: pip install -r requirements-lock.txt
+numpy==2.4.2
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.6.1
+xgboost==3.2.0
+catboost==1.2.10
+tabpfn==8.0.1
+tabpfn_extensions==0.4.1
+torch==2.10.0

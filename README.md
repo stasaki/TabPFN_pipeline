@@ -31,7 +31,8 @@ Both regression and classification models were implemented using TabPFN (Tabular
 ├── stacking.py          # Stacking of cross-validation predictions
 ├── stacking_utils.py    # Helper functions for stacking
 ├── test_script.py       # Generates simulated demo data and runs the pipeline end to end
-├── requirements.txt     # Package dependencies
+├── requirements.txt     # Package dependencies (minimum versions)
+├── requirements-lock.txt # Exact package versions used for testing
 └── README.md            # Project documentation
 ```
 
@@ -523,14 +524,49 @@ The framework supports GPU acceleration for feature selection methods that can u
 
 ## Requirements
 
-Key dependencies include:
-- numpy, pandas
-- scikit-learn
-- xgboost, catboost
-- tabpfn
-- torch
+### Software dependencies
 
-See requirements.txt for complete dependencies.
+Python packages used by the pipeline (see `requirements.txt` for minimum versions):
+
+- numpy, pandas, scipy
+- scikit-learn
+- xgboost, catboost (feature selection)
+- tabpfn, tabpfn_extensions (TabPFN models and SHAP-based interpretability)
+- torch (PyTorch; CUDA build recommended for GPU acceleration)
+
+Install the minimum versions with:
+```bash
+pip install -r requirements.txt
+```
+
+Install the exact versions listed below (recommended for reproducing results) with:
+```bash
+pip install -r requirements-lock.txt
+```
+
+### Tested environment
+
+The pipeline was tested on the following system (September 2026):
+
+| Component | Version |
+|---|---|
+| Operating system | Ubuntu 22.04.3 LTS (Linux kernel 5.15, x86_64) |
+| Python | 3.13.1 |
+| numpy | 2.4.2 |
+| pandas | 2.3.3 |
+| scipy | 1.17.1 |
+| scikit-learn | 1.6.1 |
+| xgboost | 3.2.0 |
+| catboost | 1.2.10 |
+| tabpfn | 8.0.1 |
+| tabpfn_extensions | 0.4.1 |
+| torch | 2.10.0 (CUDA 12.8 build) |
+| GPU | NVIDIA H100 NVL, driver 580.126.09 |
+
+Notes:
+- A GPU is optional. Without CUDA, TabPFN, XGBoost, and CatBoost fall back to CPU and run more slowly.
+- Other Linux distributions, macOS, and Windows should work with the same Python packages, but were not tested.
+- With scikit-learn 1.6 and scipy 1.17, importing TabPFN may require `SCIPY_ARRAY_API=1` in the environment (see [Quick Start](#quick-start-demo-with-simulated-data)).
 
 ## License
 
